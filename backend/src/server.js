@@ -3,6 +3,7 @@ const app = require('./app');
 const config = require('./config/env');
 const seedAdmin = require('./scripts/seedAdmin');
 const { initSocket } = require('./socket');
+const { initEventReminderScheduler } = require('./services/event.service');
 
 const PORT = config.port;
 
@@ -21,6 +22,13 @@ server.listen(PORT, async () => {
     await seedAdmin();
   } catch (err) {
     console.error('[Admin Seed Startup Error]:', err.message);
+  }
+
+  // Initialize automated event reminder background scheduler
+  try {
+    initEventReminderScheduler();
+  } catch (err) {
+    console.warn('[Event Reminder Scheduler Startup Error]:', err.message);
   }
 });
 

@@ -12,4 +12,10 @@ module.exports = {
   adminEmail: process.env.ADMIN_EMAIL || 'admin@alumniconnect.com',
   adminPassword: process.env.ADMIN_PASSWORD || 'AdminPass123!',
   aiServiceUrl: process.env.AI_SERVICE_URL || 'http://localhost:8000',
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID,
+    authToken: process.env.TWILIO_AUTH_TOKEN,
+    whatsappFrom: process.env.TWILIO_WHATSAPP_FROM,
+    phoneNumber: process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_WHATSAPP_FROM?.replace('whatsapp:', ''),
+  },
 };

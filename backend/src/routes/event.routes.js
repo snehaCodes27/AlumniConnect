@@ -24,6 +24,7 @@ router.delete('/:id', authorizeRoles('ALUMNI', 'ADMIN'), eventController.deleteE
 router.get('/:id/registrants', authorizeRoles('ALUMNI', 'ADMIN'), eventController.getEventRegistrants);
 router.get('/:id/invitable-students', authorizeRoles('ALUMNI', 'ADMIN'), eventController.getInvitableStudents);
 router.post('/:id/notify', authorizeRoles('ALUMNI', 'ADMIN'), eventController.sendEventNotification);
+router.post('/:id/reminders', authorizeRoles('ALUMNI', 'ADMIN'), eventController.sendEventReminders);
 
 // ── Automatic Private Event Community Routes ────────────────────────────────
 router.get('/:id/community', eventController.getEventCommunity);

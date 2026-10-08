@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const notificationService = require('./notification.service');
 const { emitToUser } = require('../socket');
+const { sendSMS } = require('./twilio.service');
 
 /**
  * Intelligent Multi-Factor Mentorship Matching Algorithm
@@ -539,6 +540,7 @@ const respondToMentorshipRequest = async ({ alumniId, requestId, status, respons
           firstName: true,
           lastName: true,
           email: true,
+          phone: true,
           profilePhoto: true,
           studentProfile: true,
         },
@@ -613,6 +615,19 @@ const respondToMentorshipRequest = async ({ alumniId, requestId, status, respons
   // Emit real-time Socket.IO events
   emitToUser(request.studentId, 'mentorship:updated', updatedRequest);
   emitToUser(alumniId, 'mentorship:updated', updatedRequest);
+
+  // Additionally dispatch SMS notification to student if mentorship was accepted and phone is available
+  if (status === 'ACCEPTED' && updatedRequest.student?.phone) {
+    try {
+      await sendSMS({
+        to: updatedRequest.student.phone,
+        body: 'AlumniConnect: Your mentorship request has been accepted. You can now connect with your mentor.',
+      });
+    } catch (smsError) {
+      // Graceful error handling: SMS failure never breaks the mentorship acceptance flow
+      console.warn(`[Mentorship SMS Warning] Failed to send SMS to student ${request.studentId}:`, smsError.message);
+    }
+  }
 
   return updatedRequest;
 };
