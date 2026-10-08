@@ -206,6 +206,25 @@ const sendEventNotification = async (req, res) => {
   }
 };
 
+const sendEventReminders = async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const { timeZone } = req.body || {};
+    const result = await eventService.sendEventRemindersForEvent(eventId, { timeZone });
+    return res.status(200).json({
+      success: true,
+      message: `Event reminder workflow completed: ${result.remindersSent} notification(s) created, ${result.smsDispatched} SMS dispatched (${result.skippedAlreadyNotified} already notified).`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('Error in sendEventReminders:', err);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Failed to dispatch event reminders.',
+    });
+  }
+};
+
 const getInvitableStudents = async (req, res) => {
   try {
     const eventId = req.params.id;
@@ -394,6 +413,7 @@ module.exports = {
   getEventRegistrants,
   getInvitableStudents,
   sendEventNotification,
+  sendEventReminders,
   // Community and Recording:
   getEventCommunity,
   createCommunityPost,

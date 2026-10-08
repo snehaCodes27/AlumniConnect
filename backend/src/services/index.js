@@ -1,2 +1,5 @@
-// Service layer will contain business logic and database access functions.
-module.exports = {};
+const twilioService = require('./twilio.service');
+
+module.exports = {
+  twilioService,
+};

@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const notificationService = require('./notification.service');
 const { emitToUser } = require('../socket');
+const { sendSMS } = require('./twilio.service');
 
 /**
  * Helper to compute skill match & eligibility for student vs job
@@ -476,6 +477,7 @@ const updateApplicationStatus = async (alumniId, applicationId, { status, review
           firstName: true,
           lastName: true,
           email: true,
+          phone: true,
           profilePhoto: true,
           studentProfile: true,
         },
@@ -519,6 +521,19 @@ const updateApplicationStatus = async (alumniId, applicationId, { status, review
   // Emit real-time Socket.IO events to student and alumni
   emitToUser(application.studentId, 'job:application:status:updated', updated);
   emitToUser(alumniId, 'job:application:status:updated', updated);
+
+  // Send SMS notification if application was transitioned to SHORTLISTED (preventing duplicate sends)
+  if (status === 'SHORTLISTED' && application.status !== 'SHORTLISTED' && updated.student?.phone) {
+    try {
+      await sendSMS({
+        to: updated.student.phone,
+        body: 'AlumniConnect: You have been shortlisted for a job opportunity. Please check your Applications section for details.',
+      });
+    } catch (smsError) {
+      // Graceful error handling: SMS failure never blocks the application status update flow
+      console.warn(`[Job Application SMS Warning] Failed to send SMS to student ${application.studentId}:`, smsError.message);
+    }
+  }
 
   return updated;
 };

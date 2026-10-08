@@ -3,6 +3,7 @@ const notificationService = require('./notification.service');
 const { emitToUser, emitToCommunity } = require('../socket');
 const aiKnowledgeService = require('./aiKnowledge.service');
 const { validateCreateEvent, validateUpdateEvent } = require('../validators/event.validator');
+const { sendSMS } = require('./twilio.service');
 
 /**
  * Create a new Event or Webinar (Alumni / Admin only)
@@ -628,6 +629,227 @@ const sendEventNotification = async (eventId, requesterId, requesterRole, data =
 };
 
 /**
+ * Timezone-aware date/time formatting for SMS and notifications
+ * Defaults to Asia/Kolkata (IST)
+ */
+const formatEventTime = (date, timeZone = 'Asia/Kolkata') => {
+  try {
+    const d = new Date(date);
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(d);
+  } catch (err) {
+    return new Date(date).toLocaleString();
+  }
+};
+
+/**
+ * Send reminders for a specific event to registered participants
+ * Deduplicates to ensure only one reminder is sent per student/event
+ */
+const sendEventRemindersForEvent = async (eventId, { timeZone = 'Asia/Kolkata' } = {}) => {
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: {
+      id: true,
+      title: true,
+      startDate: true,
+      location: true,
+      creatorId: true,
+      status: true,
+    },
+  });
+
+  if (!event) {
+    const error = new Error('Event not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  // Fetch all active registrations with user profile & phone
+  const registrations = await prisma.eventRegistration.findMany({
+    where: {
+      eventId,
+      status: 'REGISTERED',
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          role: true,
+        },
+      },
+    },
+  });
+
+  if (!registrations.length) {
+    return {
+      eventId: event.id,
+      totalRegistrants: 0,
+      remindersSent: 0,
+      smsDispatched: 0,
+      skippedAlreadyNotified: 0,
+      smsErrors: 0,
+    };
+  }
+
+  // Deduplication check: query existing EVENT_REMINDER notifications for these users
+  const userIds = registrations.map((r) => r.user.id);
+  const existingNotifications = await prisma.notification.findMany({
+    where: {
+      userId: { in: userIds },
+      type: 'EVENT_REMINDER',
+    },
+    select: {
+      userId: true,
+      data: true,
+    },
+  });
+
+  const alreadyNotifiedUserIds = new Set(
+    existingNotifications
+      .filter((n) => n.data && typeof n.data === 'object' && n.data.eventId === event.id)
+      .map((n) => n.userId)
+  );
+
+  const formattedTime = formatEventTime(event.startDate, timeZone);
+  const smsBody = `AlumniConnect: Reminder! Your registered event "${event.title}" starts on ${formattedTime}. Location: ${event.location || 'Online Webinar'}.`;
+
+  let remindersSent = 0;
+  let smsDispatched = 0;
+  let skippedAlreadyNotified = 0;
+  let smsErrors = 0;
+
+  for (const reg of registrations) {
+    const student = reg.user;
+    if (!student) continue;
+
+    // Skip if already notified for this event (prevent duplicate sends)
+    if (alreadyNotifiedUserIds.has(student.id)) {
+      skippedAlreadyNotified++;
+      continue;
+    }
+
+    // Create persistent in-app notification & Socket.IO event
+    await notificationService.createNotification({
+      userId: student.id,
+      actorId: event.creatorId,
+      type: 'EVENT_REMINDER',
+      title: `Event Reminder: ${event.title} ⏰`,
+      message: `Your registered event "${event.title}" is scheduled to start on ${formattedTime}.`,
+      data: {
+        eventId: event.id,
+        eventTitle: event.title,
+        startDate: event.startDate,
+        smsDispatched: Boolean(student.phone),
+      },
+    });
+    remindersSent++;
+
+    // Send SMS if phone number is present
+    if (student.phone) {
+      try {
+        await sendSMS({
+          to: student.phone,
+          body: smsBody,
+        });
+        smsDispatched++;
+      } catch (smsErr) {
+        smsErrors++;
+        console.warn(`[Event Reminder SMS Warning] Failed to send SMS to ${student.id} (${student.phone}):`, smsErr.message);
+      }
+    }
+  }
+
+  return {
+    eventId: event.id,
+    totalRegistrants: registrations.length,
+    remindersSent,
+    smsDispatched,
+    skippedAlreadyNotified,
+    smsErrors,
+  };
+};
+
+/**
+ * Scan all upcoming PUBLISHED events within hoursAhead and send reminders to registered participants
+ */
+const sendUpcomingEventReminders = async ({ hoursAhead = 24, timeZone = 'Asia/Kolkata' } = {}) => {
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
+
+  const upcomingEvents = await prisma.event.findMany({
+    where: {
+      status: 'PUBLISHED',
+      startDate: {
+        gte: now,
+        lte: windowEnd,
+      },
+    },
+    select: {
+      id: true,
+      title: true,
+      startDate: true,
+      location: true,
+    },
+  });
+
+  const results = [];
+  for (const event of upcomingEvents) {
+    const summary = await sendEventRemindersForEvent(event.id, { timeZone });
+    results.push({
+      eventId: event.id,
+      eventTitle: event.title,
+      startDate: event.startDate,
+      ...summary,
+    });
+  }
+
+  return {
+    eventsScanned: upcomingEvents.length,
+    events: results,
+  };
+};
+
+let reminderIntervalTimer = null;
+
+/**
+ * Automated periodic scheduler for event reminders
+ */
+const initEventReminderScheduler = ({ intervalMinutes = 30, hoursAhead = 24 } = {}) => {
+  if (reminderIntervalTimer) {
+    return;
+  }
+
+  setTimeout(() => {
+    sendUpcomingEventReminders({ hoursAhead }).catch((err) => {
+      console.warn('[Event Reminder Scheduler Startup Warning]:', err.message);
+    });
+  }, 10000);
+
+  reminderIntervalTimer = setInterval(() => {
+    sendUpcomingEventReminders({ hoursAhead }).catch((err) => {
+      console.warn('[Event Reminder Scheduler Recurring Warning]:', err.message);
+    });
+  }, intervalMinutes * 60 * 1000);
+
+  if (reminderIntervalTimer.unref) {
+    reminderIntervalTimer.unref();
+  }
+
+  console.log(`[Event Reminder Scheduler] Automated reminder worker initialized (Scanning every ${intervalMinutes}m for events within ${hoursAhead}h).`);
+};
+
+/**
  * Get Event Community Details, Posts, Attendees and Recording
  */
 const getEventCommunity = async (eventId, userId, userRole) => {
@@ -1110,5 +1332,10 @@ module.exports = {
   getEventRecording,
   queryEventRecordingRag,
   deleteEventRecording,
+  // Event Reminder workflow:
+  formatEventTime,
+  sendEventRemindersForEvent,
+  sendUpcomingEventReminders,
+  initEventReminderScheduler,
 };
 
