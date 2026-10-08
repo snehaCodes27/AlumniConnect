@@ -36,6 +36,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom';
 
 export default function EventCommunityModal({
+  embedded = false,
   event: propEvent = null,
   eventId: propEventId = null,
   onClose,
@@ -227,7 +228,13 @@ export default function EventCommunityModal({
   const handleJoinExternalMeeting = () => {
     const link = communityData?.event?.meetingUrl || event?.meetingUrl;
     if (link) {
-      window.open(link, '_blank', 'noopener,noreferrer');
+      try {
+        const url = new URL(link);
+        if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid meeting URL');
+        window.open(url.href, '_blank', 'noopener,noreferrer');
+      } catch {
+        setError('The meeting link must be a valid HTTP or HTTPS URL. Ask the host to update it.');
+      }
     }
   };
 
@@ -398,7 +405,7 @@ export default function EventCommunityModal({
   const attendeesList = communityData?.attendees || [];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden animate-fade-in text-slate-100">
+    <div className={embedded ? "ad-community-embedded flex flex-col p-2 sm:p-4 text-slate-100" : "fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden animate-fade-in text-slate-100"}>
       <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-6xl h-full max-h-[94vh] flex flex-col shadow-2xl overflow-hidden relative">
         {/* Top Header */}
         <header className="p-4 sm:p-5 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between gap-4">

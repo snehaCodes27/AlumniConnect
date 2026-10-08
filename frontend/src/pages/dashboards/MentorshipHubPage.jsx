@@ -1,3 +1,4 @@
+import StudentShell from '../../layouts/StudentShell';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -204,42 +205,7 @@ export default function MentorshipHubPage() {
   const pendingSentCount = sentRequests.filter((r) => r.status === 'PENDING').length;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800" style={{ fontFamily: "'Inter', sans-serif" }}>
-      {/* Top Navbar */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 sm:px-8 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/student/dashboard" className="flex items-center gap-2.5 text-decoration-none">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 flex items-center justify-center text-white font-black text-base shadow-sm">
-              A
-            </div>
-            <div>
-              <div className="font-extrabold text-sm text-slate-900 leading-tight">AlumniConnect</div>
-              <div className="text-[10px] text-slate-400 font-medium">Intelligent Mentorship Matching</div>
-            </div>
-          </Link>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Link
-            to="/alumni/directory"
-            className="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
-          >
-            <Compass size={14} />
-            <span>Alumni Directory</span>
-          </Link>
-
-          <Link
-            to="/student/dashboard"
-            className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
-          >
-            ← Back to Dashboard
-          </Link>
-
-          <NotificationDropdown align="right" />
-        </div>
-      </header>
-
-      {/* Main Body */}
+    <StudentShell><div className="student-shell-content min-h-screen bg-slate-50 text-slate-800" style={{ fontFamily: "'Inter', sans-serif" }}>
       <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
         {/* Toast Alert */}
         {toastMessage && (
@@ -872,6 +838,6 @@ export default function MentorshipHubPage() {
           }}
         />
       )}
-    </div>
+    </div></StudentShell>
   );
 }

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '../context/AuthContext';
 import { SocketProvider } from '../context/SocketContext';
 import MainLayout from '../layouts/MainLayout';
+import AlumniRouteLayout from '../layouts/AlumniRouteLayout';
 import LandingPage from '../pages/LandingPage';
 import LoginPage from '../pages/auth/LoginPage';
 import StudentRegisterPage from '../pages/auth/StudentRegisterPage';
@@ -40,6 +41,7 @@ export default function AppRoutes() {
 
           {/* Shared Authenticated Routes */}
           <Route element={<ProtectedRoute allowedRoles={['STUDENT', 'ALUMNI', 'ADMIN']} />}>
+            <Route element={<AlumniRouteLayout />}>
             <Route path="/alumni/directory" element={<AlumniDirectoryPage />} />
             <Route path="/jobs" element={<JobsPortalPage />} />
             <Route path="/events" element={<EventsHubPage />} />
@@ -48,6 +50,7 @@ export default function AppRoutes() {
             <Route path="/communities" element={<CommunitiesHubPage />} />
             <Route path="/communities/:slug" element={<CommunitiesHubPage />} />
             <Route path="/leaderboard" element={<LeaderboardPage />} />
+            </Route>
           </Route>
 
           {/* Protected Student Routes */}

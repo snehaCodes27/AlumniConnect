@@ -1,121 +1,83 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ArrowRight, BriefcaseBusiness, ChartNoAxesCombined, GraduationCap, LogIn, Settings, Users } from 'lucide-react';
 import { checkBackendHealth } from '../services/healthService';
+import './landing.css';
+
+const roles = [
+  { title: 'Students', icon: GraduationCap, tone: 'blue', description: 'Access mentorship, career guidance, alumni connections and opportunities.' },
+  { title: 'Alumni', icon: Users, tone: 'purple', description: 'Guide students, share career opportunities and build meaningful connections.' },
+  { title: 'Admins', icon: Settings, tone: 'teal', description: 'Manage the platform, coordinate placement activities and oversee community engagement.' },
+];
+
+function FloatingFeatureCard({ icon: Icon, title, detail, position, tone }) {
+  return <div className={`landing-feature ${position}`}>
+    <span className={`landing-icon ${tone}`}><Icon size={23} aria-hidden="true" /></span>
+    <span><strong>{title}</strong><span>{detail}</span></span>
+  </div>;
+}
+
+function HeroVisual({ alumni = false }) {
+  return <div className={`landing-visual ${alumni ? 'alumni' : 'student'}`}>
+    <div className="landing-orbit" aria-hidden="true"><i /><i /><i /></div>
+    <div className="landing-portrait">
+      <img src={`/images/landing-${alumni ? 'alumni' : 'student'}.jpg`} width="1086" height="1448" decoding="async" alt={alumni ? 'Young alumni professional holding a laptop outside an office building' : 'University student holding a laptop on a sunny campus'} />
+    </div>
+    <FloatingFeatureCard icon={alumni ? BriefcaseBusiness : GraduationCap} title={alumni ? 'Share' : 'Learn'} detail={alumni ? 'Opportunities' : 'From Alumni'} position="feature-top" tone={alumni ? 'amber' : 'blue'} />
+    <FloatingFeatureCard icon={alumni ? ChartNoAxesCombined : Users} title={alumni ? 'Build' : 'Find'} detail={alumni ? 'Stronger Network' : 'Mentorship'} position="feature-bottom" tone="teal" />
+  </div>;
+}
+
+function RoleCard({ role, index }) {
+  const Icon = role.icon;
+  return <Link to="/login" className={`landing-role ${role.tone}`} aria-label={`Sign in to AlumniConnect as ${role.title}`}>
+    <span className={`landing-role-icon landing-icon ${role.tone}`}><Icon size={31} strokeWidth={2.3} aria-hidden="true" /></span>
+    <div className="landing-role-copy"><span className="landing-eyebrow">Role {index + 1}</span><h3>{role.title}</h3><p>{role.description}</p></div>
+    <span className="landing-role-arrow"><ArrowRight size={19} aria-hidden="true" /></span>
+  </Link>;
+}
 
 export default function LandingPage() {
-  const [backendStatus, setBackendStatus] = useState({
-    loading: true,
-    connected: false,
-    message: '',
-  });
-
+  const [backendStatus, setBackendStatus] = useState({ loading: true, connected: false, message: '' });
   useEffect(() => {
-    checkBackendHealth()
-      .then((data) => {
-        setBackendStatus({
-          loading: false,
-          connected: true,
-          message: data.message || 'Connected',
-        });
-      })
-      .catch(() => {
-        setBackendStatus({
-          loading: false,
-          connected: false,
-          message: 'Backend offline or unreachable',
-        });
-      });
+    let active = true;
+    const refresh = async () => {
+      try {
+        const data = await checkBackendHealth();
+        if (active) setBackendStatus({ loading: false, connected: data.success === true, message: data.message || 'Backend health check unsuccessful' });
+      } catch {
+        if (active) setBackendStatus({ loading: false, connected: false, message: 'Backend offline or unreachable' });
+      }
+    };
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    return () => { active = false; clearInterval(timer); };
   }, []);
+  const state = backendStatus.loading ? 'checking' : backendStatus.connected ? 'connected' : 'disconnected';
+  const authLabel = backendStatus.loading ? 'Checking Authentication System' : backendStatus.connected ? 'Authentication System Active' : 'Authentication System Unavailable';
 
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center px-4 py-16 sm:px-6 lg:px-8 relative overflow-hidden bg-slate-950 text-slate-100">
-      {/* Background Glows */}
-      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none" />
-
-      <div className="max-w-3xl w-full text-center space-y-8 z-10">
-        {/* Platform Identity */}
-        <div className="space-y-4">
-          <div className="inline-flex items-center space-x-2 px-3.5 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-            <span>Authentication System Active</span>
-          </div>
-
-          <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight text-white">
-            AlumniConnect
-          </h1>
-
-          <p className="text-xl sm:text-2xl font-medium text-slate-400">
-            &ldquo;Connect. Guide. Grow Together.&rdquo;
-          </p>
-        </div>
-
-        {/* Action CTA Buttons */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
-          <Link
-            to="/login"
-            className="w-full sm:w-auto px-8 py-3.5 bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold rounded-xl shadow-lg shadow-indigo-500/25 transition-all text-center"
-          >
-            Sign In to Platform
-          </Link>
-          <Link
-            to="/student/register"
-            className="w-full sm:w-auto px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-indigo-400 font-semibold rounded-xl border border-indigo-500/30 transition-all text-center"
-          >
-            Register as Student
-          </Link>
-          <Link
-            to="/alumni/register"
-            className="w-full sm:w-auto px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-cyan-400 font-semibold rounded-xl border border-cyan-500/30 transition-all text-center"
-          >
-            Register as Alumni
-          </Link>
-        </div>
-
-        {/* Roles Preview Card */}
-        <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-slate-800 p-6 sm:p-8 text-left space-y-4 shadow-2xl">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Built for 3 Unified Roles
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-800">
-              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">Role 1</span>
-              <h3 className="font-semibold text-white mt-1">Students</h3>
-              <p className="text-xs text-slate-400 mt-1">Access mentorship, career guidance & admin approval.</p>
-            </div>
-            <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-800">
-              <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">Role 2</span>
-              <h3 className="font-semibold text-white mt-1">Alumni</h3>
-              <p className="text-xs text-slate-400 mt-1">Guide students, network & manage mentor availability.</p>
-            </div>
-            <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-800">
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400">Role 3</span>
-              <h3 className="font-semibold text-white mt-1">Admins</h3>
-              <p className="text-xs text-slate-400 mt-1">Verify user registrations & review pending accounts.</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Backend Connectivity Status Indicator */}
-        <div className="inline-flex items-center space-x-2 text-sm text-slate-400 bg-slate-900/90 border border-slate-800 rounded-lg px-4 py-2.5 shadow-sm">
-          <span className="font-semibold text-slate-300">Backend Status:</span>
-          {backendStatus.loading ? (
-            <span className="text-amber-400 font-medium inline-flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-              Checking connection...
-            </span>
-          ) : backendStatus.connected ? (
-            <span className="text-emerald-400 font-semibold inline-flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-              Connected ({backendStatus.message})
-            </span>
-          ) : (
-            <span className="text-rose-400 font-medium inline-flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-rose-400"></span>
-              Disconnected ({backendStatus.message})
-            </span>
-          )}
-        </div>
+  return <div className="landing-page">
+    <div className="landing-decoration dots" aria-hidden="true" />
+    <section className="landing-hero" aria-labelledby="landing-title">
+      <HeroVisual />
+      <div className="landing-hero-copy">
+        <div className={`landing-auth-badge ${state}`}><GraduationCap size={19} aria-hidden="true" /><span>{authLabel}</span><span className="landing-status-dot" /></div>
+        <h1 id="landing-title">Alumni<span className="landing-gradient-text">Connect</span></h1>
+        <p className="landing-tagline">“Connect. Guide. Grow Together.”</p>
+        <p className="landing-description">A unified platform for students, alumni and administrators to build meaningful connections, share opportunities and grow together.</p>
+        <Link to="/login" className="landing-cta"><LogIn size={21} aria-hidden="true" />Sign In to Platform<ArrowRight size={19} aria-hidden="true" /></Link>
       </div>
+      <HeroVisual alumni />
+    </section>
+    <section className="landing-roles" aria-labelledby="landing-roles-title">
+      <h2 id="landing-roles-title" className="sr-only">A place for every role</h2>
+      {roles.map((role, index) => <RoleCard key={role.title} role={role} index={index} />)}
+    </section>
+    <div className="landing-health-row">
+      <div className={`landing-health ${state}`} role="status" aria-live="polite" title={backendStatus.message}>
+        <span className="landing-status-dot" /><span>Backend Status:</span><strong>{backendStatus.loading ? 'Checking…' : backendStatus.connected ? 'Connected' : 'Disconnected'}</strong>
+      </div>
+      <span className="landing-signature" aria-hidden="true">Stronger<br /><span>Together</span></span>
     </div>
-  );
+  </div>;
 }

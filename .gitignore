@@ -72,3 +72,14 @@ coverage/
 # ─── OS Files ────────────────────────────────────────────────────────────────
 desktop.ini
 Thumbs.db
+
+# Ignore all images in a specific folder
+public/assets/
+
+# Or ignore all files ending in .png or .jpg everywhere
+*.png
+*.jpg
+*.jpeg
+
+*.md
+*.sql
