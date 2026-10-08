@@ -74,7 +74,7 @@ export default function NotificationDropdown({ align = 'right' }) {
   };
 
   return (
-    <div className="relative inline-block text-left" ref={dropdownRef}>
+    <div className="notification-dropdown relative inline-block text-left" ref={dropdownRef}>
       {/* Bell Button */}
       <button
         onClick={() => {

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
-import NotificationDropdown from '../../components/NotificationDropdown';
+import NetworkPageHero from '../../components/NetworkPageHero';
+import { mentorshipService } from '../../services/mentorshipService';
 import ConnectModal from '../../components/ConnectModal';
 import MentorshipRequestModal from '../../components/MentorshipRequestModal';
 import { useAuth } from '../../context/AuthContext';
@@ -100,7 +101,7 @@ function SkeletonCard() {
 }
 
 // ─── Alumni Card ──────────────────────────────────────────────────────────────
-function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick, onMessageClick }) {
+function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick, onMessageClick, viewerId }) {
   const {
     user,
     currentCompany,
@@ -119,9 +120,11 @@ function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick
   } = alumni;
 
   const connStatus = connection?.status || 'NONE';
+  const mentorshipStatus = alumni.mentorshipStatus;
+  const isOwnProfile = viewerId === (alumni.userId || user?.id);
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col justify-between overflow-hidden">
+    <div className="directory-card bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col justify-between overflow-hidden">
       <div className="p-5">
         {/* Header */}
         <div className="flex gap-3.5 mb-4">
@@ -157,7 +160,7 @@ function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick
                     }`}
                     title={alumni.semanticScore ? `Semantic: ${Math.round(alumni.semanticScore)}%` : 'Relevance Score'}
                   >
-                    🎯 {Math.round(alumni.relevanceScore)}% Match
+                    {Math.round(alumni.relevanceScore)}% {alumni.semanticScore != null ? 'Match' : 'Relevance'}
                   </span>
                 )}
                 {mentorshipAvailable && (
@@ -257,7 +260,7 @@ function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick
         {alumni.matchReasons && alumni.matchReasons.length > 0 && (
           <div className="mt-3 p-2.5 bg-gradient-to-r from-indigo-50/70 to-purple-50/70 rounded-xl border border-indigo-100/80">
             <div className="text-[10px] uppercase font-bold text-indigo-700 tracking-wider flex items-center gap-1 mb-1.5">
-              <span>✨</span> AI Match Reason
+              <span>✨</span> Why this profile
             </div>
             <div className="flex flex-col gap-1">
               {alumni.matchReasons.slice(0, 2).map((reason, idx) => (
@@ -277,20 +280,21 @@ function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick
           onClick={() => onSelectProfile(alumni)}
           className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
         >
-          Profile
+          View Profile
         </button>
 
-        {mentorshipAvailable && onMentorshipClick && (
+        {onMentorshipClick && (
           <button
+            disabled={!mentorshipAvailable || ['PENDING','ACCEPTED'].includes(mentorshipStatus)}
             onClick={() => onMentorshipClick(alumni)}
             className="flex-1 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs flex items-center justify-center gap-1"
           >
-            <span>🎯</span> Mentor
+            {mentorshipStatus === 'PENDING' ? 'Mentorship Pending' : mentorshipStatus === 'ACCEPTED' ? 'Active Mentor' : !mentorshipAvailable ? 'Unavailable' : 'Request Mentorship'}
           </button>
         )}
 
         {/* Dynamic Connection Button */}
-        {connStatus === 'ACCEPTED' ? (
+        {isOwnProfile ? <span className="text-xs font-semibold text-indigo-600 px-3 py-2">Your profile</span> : connStatus === 'ACCEPTED' ? (
           <button
             onClick={() => onMessageClick ? onMessageClick(alumni) : null}
             className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all"
@@ -303,7 +307,7 @@ function AlumniCard({ alumni, onSelectProfile, onConnectClick, onMentorshipClick
             disabled
             className="flex-1 py-2 bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold rounded-xl flex items-center justify-center gap-1 cursor-default"
           >
-            <span>⏳</span> Sent
+            <span>⏳</span> {connection?.isSender ? 'Request Sent' : 'Incoming Request'}
           </button>
         ) : (
           <button
@@ -324,6 +328,7 @@ function FilterPill({ label, onRemove }) {
     <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-full border border-indigo-200 shadow-2xs">
       <span>{label}</span>
       <button
+        aria-label={`Remove ${label} filter`}
         onClick={onRemove}
         className="hover:bg-indigo-200/60 rounded-full w-4 h-4 inline-flex items-center justify-center text-indigo-800 font-bold transition-colors"
       >
@@ -334,15 +339,18 @@ function FilterPill({ label, onRemove }) {
 }
 
 // ─── Profile Modal ────────────────────────────────────────────────────────────
-function ProfileModal({ alumni, onClose, onConnectClick, onMentorshipClick, onMessageClick }) {
+function ProfileModal({ alumni, onClose, onConnectClick, onMentorshipClick, onMessageClick, viewerId }) {
   if (!alumni) return null;
   const { user, currentCompany, jobRole, branch, graduationYear, domain, skills = [], location, mentorshipAvailable, yearsOfExperience, previousCompanies = [], linkedinUrl, githubUrl, resumeUrl, connection } = alumni;
   const connStatus = connection?.status || 'NONE';
+  const mentorshipStatus = alumni.mentorshipStatus;
+  const isOwnProfile = viewerId === (alumni.userId || user?.id);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn">
+    <div role="dialog" aria-modal="true" aria-label="Alumni profile" className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn">
       <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-100 p-6 relative">
         <button
+          aria-label="Close profile"
           onClick={onClose}
           className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-lg transition-colors"
         >
@@ -479,19 +487,20 @@ function ProfileModal({ alumni, onClose, onConnectClick, onMentorshipClick, onMe
         {/* Action Buttons & External Links */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-5 border-t border-slate-100">
           <div className="flex items-center gap-2 flex-wrap">
-            {mentorshipAvailable && onMentorshipClick && (
+            {onMentorshipClick && (
               <button
+                disabled={!mentorshipAvailable || ['PENDING','ACCEPTED'].includes(mentorshipStatus)}
                 onClick={() => {
                   onClose();
                   onMentorshipClick(alumni);
                 }}
                 className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5"
               >
-                <span>🎯</span> Request Mentorship
+                {mentorshipStatus === 'PENDING' ? 'Mentorship Pending' : mentorshipStatus === 'ACCEPTED' ? 'Active Mentor' : !mentorshipAvailable ? 'Unavailable' : 'Request Mentorship'}
               </button>
             )}
 
-            {connStatus === 'ACCEPTED' ? (
+            {isOwnProfile ? <span className="text-xs font-semibold text-indigo-600 px-3 py-2">Your profile</span> : connStatus === 'ACCEPTED' ? (
               <button
                 onClick={() => {
                   onClose();
@@ -503,7 +512,7 @@ function ProfileModal({ alumni, onClose, onConnectClick, onMentorshipClick, onMe
               </button>
             ) : connStatus === 'PENDING' ? (
               <span className="px-4 py-2 bg-amber-50 text-amber-700 text-xs font-semibold rounded-xl border border-amber-200 flex items-center gap-1.5">
-                <span>⏳</span> Connection Sent
+                <span>⏳</span> {connection?.isSender ? 'Request Sent' : 'Incoming Request'}
               </span>
             ) : (
               <button
@@ -559,10 +568,12 @@ function ProfileModal({ alumni, onClose, onConnectClick, onMentorshipClick, onMe
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function AlumniDirectoryPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const routeQuery = searchParams.get('q') || '';
   const { user } = useAuth();
 
   const [filters, setFilters] = useState({
-    q: '',
+    q: routeQuery,
     currentCompany: '',
     previousCompany: '',
     jobRole: '',
@@ -574,7 +585,7 @@ export default function AlumniDirectoryPage() {
     mentorshipAvailable: '',
   });
 
-  const [draftQ, setDraftQ] = useState('');
+  const [draftQ, setDraftQ] = useState(routeQuery);
   const [alumni, setAlumni] = useState([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 0 });
   const [loading, setLoading] = useState(false);
@@ -584,11 +595,39 @@ export default function AlumniDirectoryPage() {
   const [connectTargetAlumni, setConnectTargetAlumni] = useState(null);
   const [mentorshipTargetAlumni, setMentorshipTargetAlumni] = useState(null);
 
-  const searchTimer = useRef(null);
+  const searchTimer = useRef(null), requestVersion = useRef(0), latestFilters = useRef(filters);
+  latestFilters.current = filters;
+  const [mentorshipStatuses, setMentorshipStatuses] = useState({});
+  const [relationshipError, setRelationshipError] = useState('');
+  const [loadingRelationships, setLoadingRelationships] = useState(user?.role === 'STUDENT');
+  const loadMentorshipStatuses = useCallback(async () => {
+    if (user?.role !== 'STUDENT') return;
+    setLoadingRelationships(true);
+    try {
+      const records = [];
+      let page = 1, pages = 1;
+      do {
+        const result = await mentorshipService.getSentRequests({page, limit: 100});
+        records.push(...(result.data?.requests || []));
+        pages = result.data?.pagination?.totalPages || 1;
+        page++;
+      } while (page <= pages);
+      const states = {};
+      records.forEach(r => { if (['PENDING','ACCEPTED'].includes(r.status)) states[r.alumniId] = r.status; });
+      setMentorshipStatuses(states);
+      setRelationshipError('');
+    } catch { setRelationshipError('Mentorship status could not be loaded. Refresh before requesting mentorship.'); } finally { setLoadingRelationships(false); }
+  }, [user?.role]);
+  useEffect(() => {
+    loadMentorshipStatuses();
+    window.addEventListener('mentorship:updated', loadMentorshipStatuses);
+    return () => { window.removeEventListener('mentorship:updated', loadMentorshipStatuses); clearTimeout(searchTimer.current); };
+  }, [loadMentorshipStatuses]);
 
   // ── Fetch Alumni from Backend ──────────────────────────────────────────────
   const fetchAlumni = useCallback(async (activeFilters, overridePage = 1) => {
-    const current = activeFilters || filters;
+    const version = ++requestVersion.current;
+    const current = activeFilters || latestFilters.current;
     setLoading(true);
     setError('');
     try {
@@ -602,20 +641,24 @@ export default function AlumniDirectoryPage() {
       params.set('limit', '18');
 
       const res = await api.get(`/alumni/directory?${params.toString()}`);
+      if (version !== requestVersion.current) return;
       if (res.data?.success) {
         setAlumni(res.data.data.alumni || []);
         setPagination(res.data.data.pagination || { total: 0, page: 1, totalPages: 0 });
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to load alumni directory.');
+      if (version === requestVersion.current) setError(err.response?.data?.message || 'Failed to load alumni directory.');
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   }, [filters]);
 
   useEffect(() => {
-    fetchAlumni(filters, 1);
-  }, []);
+    const next = {...latestFilters.current, q:routeQuery};
+    setFilters(next);
+    setDraftQ(routeQuery);
+    fetchAlumni(next, 1);
+  }, [routeQuery]);
 
   // ── Real-time Socket Event Listeners ────────────────────────────────────────
   useEffect(() => {
@@ -653,25 +696,28 @@ export default function AlumniDirectoryPage() {
     setDraftQ(val);
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      const next = { ...filters, q: val };
+      const next = { ...latestFilters.current, q: val };
       setFilters(next);
       fetchAlumni(next, 1);
     }, 350);
   };
 
   const applyFilter = (key, val) => {
-    const next = { ...filters, [key]: val };
+    const next = { ...latestFilters.current, q: draftQ, [key]: val };
+    clearTimeout(searchTimer.current);
     setFilters(next);
     fetchAlumni(next, 1);
   };
 
   const clearFilter = (key) => {
-    const next = { ...filters, [key]: '' };
+    const next = { ...latestFilters.current, q: draftQ, [key]: '' };
+    clearTimeout(searchTimer.current);
     setFilters(next);
     fetchAlumni(next, 1);
   };
 
   const clearAll = () => {
+    clearTimeout(searchTimer.current);
     const reset = {
       q: '',
       currentCompany: '',
@@ -711,63 +757,11 @@ export default function AlumniDirectoryPage() {
   const activeFilterList = Object.entries(filters).filter(([k, v]) => Boolean(v) && k !== 'q');
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
+    <div className="network-page directory-page">
+      <NetworkPageHero directory />
       {/* Top Header */}
-      <div className="bg-white border-b border-slate-200/80 shadow-xs sticky top-0 z-30">
+      <div className="directory-toolbar">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => navigate('/student/dashboard')}
-                className="p-2 rounded-xl hover:bg-slate-100 transition-colors text-slate-500 font-bold"
-                title="Back to Dashboard"
-              >
-                ←
-              </button>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Alumni Directory</h1>
-                <p className="text-xs text-slate-400">
-                  {loading ? 'Searching...' : `${pagination.total} verified alumni found`}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => navigate('/student/mentorship')}
-                className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs"
-              >
-                <span>🎯</span> Mentorship Hub
-              </button>
-
-              <NotificationDropdown align="right" />
-
-              <button
-                onClick={() => setFiltersOpen(!filtersOpen)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                  filtersOpen || activeFilterList.length > 0
-                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <span>⚙</span> Filters
-                {activeFilterList.length > 0 && (
-                  <span className="bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
-                    {activeFilterList.length}
-                  </span>
-                )}
-              </button>
-              {activeFilterList.length > 0 && (
-                <button
-                  onClick={clearAll}
-                  className="px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 rounded-xl transition-colors font-semibold"
-                >
-                  Clear All
-                </button>
-              )}
-            </div>
-          </div>
-
           {/* AI Semantic Search bar */}
           <div className="space-y-2">
             <div className="relative">
@@ -776,13 +770,16 @@ export default function AlumniDirectoryPage() {
               </div>
               <input
                 className="w-full pl-9 pr-28 py-3 bg-gradient-to-r from-slate-50 to-indigo-50/30 border border-slate-200 rounded-2xl text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all shadow-2xs font-medium"
-                placeholder="Ask in natural language: e.g. 'Looking for a MERN developer at Accenture who can guide me'..."
+                aria-label="Search alumni directory"
+                placeholder="Search by name, company, job title, skills, or interests…"
+                onKeyDown={(e) => { if (e.key === 'Enter') { clearTimeout(searchTimer.current); const next = {...latestFilters.current, q:draftQ}; setFilters(next); fetchAlumni(next,1); } }}
                 value={draftQ}
                 onChange={(e) => handleSearchInput(e.target.value)}
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
                 {draftQ && (
                   <button
+                    aria-label="Clear directory search"
                     onClick={() => handleSearchInput('')}
                     className="p-1 rounded-full hover:bg-slate-200 text-slate-400 text-xs font-bold"
                   >
@@ -795,29 +792,13 @@ export default function AlumniDirectoryPage() {
               </div>
             </div>
 
-            {/* Quick Natural Query Chips */}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
-                <span>💡</span> Try:
-              </span>
-              {[
-                'MERN Stack at Accenture',
-                'Google Software Engineer',
-                'Cloud Architect Mentors',
-                'IT Graduate with 5+ Years',
-              ].map((queryText) => (
-                <button
-                  key={queryText}
-                  onClick={() => handleSearchInput(queryText)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-                    draftQ === queryText
-                      ? 'bg-indigo-600 text-white shadow-2xs font-bold'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50'
-                  }`}
-                >
-                  {queryText}
-                </button>
-              ))}
+            <p className="text-xs text-slate-500">Search naturally, for example: “Alumni who worked at Accenture and have React experience.”</p>
+            <div className="flex flex-wrap gap-2 pt-2">
+              <select aria-label="Filter by domain" value={filters.domain} onChange={e => applyFilter('domain',e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-xs"><option value="">All Domains</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}</select>
+              <input aria-label="Filter by company" value={filters.currentCompany} onChange={e => applyFilter('currentCompany',e.target.value)} placeholder="All Companies" className="border border-slate-200 rounded-xl px-3 py-2 text-xs w-40" />
+              <input aria-label="Filter by location" value={filters.location} onChange={e => applyFilter('location',e.target.value)} placeholder="All Locations" className="border border-slate-200 rounded-xl px-3 py-2 text-xs w-40" />
+              <button aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)} className="border border-indigo-100 bg-indigo-50 text-indigo-700 rounded-xl px-4 py-2 text-xs font-bold">More Filters {activeFilterList.length > 0 && `(${activeFilterList.length})`}</button>
+              <button onClick={clearAll} className="border border-slate-200 rounded-xl px-4 py-2 text-xs">Reset</button>
             </div>
           </div>
         </div>
@@ -825,7 +806,7 @@ export default function AlumniDirectoryPage() {
 
       {/* Filter Drawer / Panel */}
       {filtersOpen && (
-        <div className="bg-white border-b border-slate-200/80 shadow-xs animate-fadeIn">
+        <div className="directory-filter-panel bg-white border-b border-slate-200/80 shadow-xs animate-fadeIn">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
               <div>
@@ -833,6 +814,7 @@ export default function AlumniDirectoryPage() {
                   Branch
                 </label>
                 <select
+                  aria-label="branch filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   value={filters.branch}
                   onChange={(e) => applyFilter('branch', e.target.value)}
@@ -851,6 +833,7 @@ export default function AlumniDirectoryPage() {
                   Grad Year
                 </label>
                 <select
+                  aria-label="graduationYear filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   value={filters.graduationYear}
                   onChange={(e) => applyFilter('graduationYear', e.target.value)}
@@ -869,6 +852,7 @@ export default function AlumniDirectoryPage() {
                   Domain
                 </label>
                 <select
+                  aria-label="domain filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   value={filters.domain}
                   onChange={(e) => applyFilter('domain', e.target.value)}
@@ -887,6 +871,7 @@ export default function AlumniDirectoryPage() {
                   Current Company
                 </label>
                 <input
+                  aria-label="currentCompany filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   placeholder="e.g. Google, Amazon"
                   value={filters.currentCompany}
@@ -899,6 +884,7 @@ export default function AlumniDirectoryPage() {
                   Previous Company
                 </label>
                 <input
+                  aria-label="previousCompany filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   placeholder="e.g. TCS, Infosys"
                   value={filters.previousCompany}
@@ -911,6 +897,7 @@ export default function AlumniDirectoryPage() {
                   Job Role
                 </label>
                 <input
+                  aria-label="jobRole filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   placeholder="e.g. SDE, Data Analyst"
                   value={filters.jobRole}
@@ -923,6 +910,7 @@ export default function AlumniDirectoryPage() {
                   Skills
                 </label>
                 <input
+                  aria-label="skills filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   placeholder="e.g. React, Python"
                   value={filters.skills}
@@ -935,6 +923,7 @@ export default function AlumniDirectoryPage() {
                   Location
                 </label>
                 <input
+                  aria-label="location filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   placeholder="e.g. Bangalore, London"
                   value={filters.location}
@@ -947,6 +936,7 @@ export default function AlumniDirectoryPage() {
                   Mentorship
                 </label>
                 <select
+                  aria-label="mentorshipAvailable filter"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   value={filters.mentorshipAvailable}
                   onChange={(e) => applyFilter('mentorshipAvailable', e.target.value)}
@@ -979,16 +969,18 @@ export default function AlumniDirectoryPage() {
       )}
 
       {/* Main Results Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="directory-results">
+        <div className="directory-summary"><span aria-live="polite">{loading ? 'Searching…' : `${pagination.total} verified alumni found`}</span><span>{filters.q ? 'Ranked by search relevance' : 'Recommended order'}</span></div>
+        {relationshipError && <div className="chat-error" role="alert">{relationshipError}<button onClick={loadMentorshipStatuses}>Retry</button></div>}
         {error && (
           <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs sm:text-sm flex items-center gap-2">
             <span>⚠</span>
-            <span>{error}</span>
+            <span>{error}</span><button className="underline" onClick={() => fetchAlumni(filters,pagination.page)}>Retry</button>
           </div>
         )}
 
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="directory-grid">
             {Array.from({ length: 6 }).map((_, i) => (
               <SkeletonCard key={i} />
             ))}
@@ -1009,14 +1001,15 @@ export default function AlumniDirectoryPage() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div className="directory-grid">
               {alumni.map((a) => (
                 <AlumniCard
                   key={a.id}
-                  alumni={a}
+                  viewerId={user?.id}
+                  alumni={{...a, mentorshipStatus:mentorshipStatuses[a.userId || a.user?.id]}}
                   onSelectProfile={setSelectedAlumni}
                   onConnectClick={setConnectTargetAlumni}
-                  onMentorshipClick={setMentorshipTargetAlumni}
+                  onMentorshipClick={user?.role === 'STUDENT' && !relationshipError && !loadingRelationships ? setMentorshipTargetAlumni : undefined}
                   onMessageClick={(alum) => navigate(`/messages?userId=${alum.user?.id || alum.userId}`)}
                 />
               ))}
@@ -1079,10 +1072,11 @@ export default function AlumniDirectoryPage() {
       {/* Detailed Profile Modal */}
       {selectedAlumni && (
         <ProfileModal
-          alumni={selectedAlumni}
+          viewerId={user?.id}
+          alumni={{...selectedAlumni, mentorshipStatus:mentorshipStatuses[selectedAlumni.userId || selectedAlumni.user?.id]}}
           onClose={() => setSelectedAlumni(null)}
           onConnectClick={setConnectTargetAlumni}
-          onMentorshipClick={setMentorshipTargetAlumni}
+          onMentorshipClick={user?.role === 'STUDENT' && !relationshipError && !loadingRelationships ? setMentorshipTargetAlumni : undefined}
           onMessageClick={(alum) => navigate(`/messages?userId=${alum.user?.id || alum.userId}`)}
         />
       )}
@@ -1102,6 +1096,7 @@ export default function AlumniDirectoryPage() {
           alumni={mentorshipTargetAlumni}
           onClose={() => setMentorshipTargetAlumni(null)}
           onSuccess={() => {
+            loadMentorshipStatuses();
             fetchAlumni(filters, pagination.page);
           }}
         />

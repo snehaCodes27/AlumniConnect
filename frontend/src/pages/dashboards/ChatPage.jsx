@@ -3,11 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { chatService } from '../../services/chatService';
-import NotificationDropdown from '../../components/NotificationDropdown';
+import NetworkPageHero from '../../components/NetworkPageHero';
 import {
   MessageSquare, Send, Search, Check, CheckCheck, Users,
-  ArrowLeft, Circle, Sparkles, UserCheck, Clock, Plus,
-  ShieldCheck, AlertCircle, Bot,
+  ArrowLeft, UserCheck, Plus, AlertCircle,
 } from 'lucide-react';
 
 function initials(first = '', last = '') {
@@ -47,7 +46,16 @@ export default function ChatPage() {
   const [activeConv, setActiveConv] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
-  const [searchFilter, setSearchFilter] = useState('');
+  const [searchFilter, setSearchFilter] = useState(searchParams.get('q') || '');
+  useEffect(() => setSearchFilter(searchParams.get('q') || ''), [searchParams]);
+  const [roleFilter, setRoleFilter] = useState('ALL');
+  const [error, setError] = useState('');
+  const [historyError, setHistoryError] = useState('');
+  const [contactError, setContactError] = useState('');
+  const [historyPage, setHistoryPage] = useState(1);
+  const sendLock = useRef(false), startLocks = useRef(new Set());
+  const activeId = useRef(null), streamRef = useRef(null), nearBottom = useRef(true);
+  activeId.current = activeConv?.id;
   const [loadingConv, setLoadingConv] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -64,13 +72,15 @@ export default function ChatPage() {
 
   // Scroll to bottom of message list
   const scrollToBottom = (smooth = true) => {
-    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+    const stream = streamRef.current;
+    if (stream) stream.scrollTo({ top: stream.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   };
 
   // ── Load All User Conversations ───────────────────────────────────────────
   const fetchConversations = useCallback(async () => {
     try {
       setLoadingConv(true);
+      setError('');
       const res = await chatService.getConversations();
       if (res.success) {
         setConversations(res.data || []);
@@ -86,7 +96,7 @@ export default function ChatPage() {
         }
       }
     } catch (err) {
-      console.error('Failed to load conversations:', err);
+      setError(err.response?.data?.message || 'Could not load conversations. Please retry.');
     } finally {
       setLoadingConv(false);
     }
@@ -97,14 +107,22 @@ export default function ChatPage() {
   }, [fetchConversations]);
 
   // ── Load Messages for Active Conversation ─────────────────────────────────
-  const fetchMessages = useCallback(async (convId) => {
+  const fetchMessages = useCallback(async (convId, page) => {
     if (!convId) return;
     try {
       setLoadingMessages(true);
-      const res = await chatService.getMessages(convId, { limit: 100 });
+      setHistoryError('');
+      let res = await chatService.getMessages(convId, { limit: 100, page: page || 1 });
+      const initial = page === undefined;
+      if (initial) {
+        page = res.data?.pagination?.totalPages || 1;
+        if (page > 1) res = await chatService.getMessages(convId, { limit: 100, page });
+      }
+      if (activeId.current !== convId) return;
       if (res.success) {
-        setMessages(res.data.messages || []);
-        setTimeout(() => scrollToBottom(false), 80);
+        setMessages(prev => [...prev, ...(res.data.messages || []).filter(m => !prev.some(p => p.id === m.id))]);
+        setHistoryPage(page);
+        if (initial) setTimeout(() => { if (activeId.current === convId) scrollToBottom(false); }, 80);
 
         // Clear local unread badge for this conversation
         setConversations((prev) =>
@@ -112,23 +130,30 @@ export default function ChatPage() {
         );
       }
     } catch (err) {
-      console.error('Failed to load messages:', err);
+      if (activeId.current === convId) setHistoryError(err.response?.data?.message || 'Could not load message history.');
     } finally {
-      setLoadingMessages(false);
+      if (activeId.current === convId) setLoadingMessages(false);
     }
   }, []);
 
   useEffect(() => {
     if (activeConv?.id) {
+      setMessages([]);
+      setInputText('');
+      nearBottom.current = true;
       fetchMessages(activeConv.id);
       setIsOtherTyping(false);
 
       // Join socket room for this conversation
+      const rejoin = () => socket?.emit('chat:join', { conversationId: activeConv.id });
       if (socket) {
-        socket.emit('chat:join', { conversationId: activeConv.id });
+        rejoin();
+        socket.on('connect', rejoin);
       }
 
       return () => {
+        socket?.off('connect', rejoin);
+        clearTimeout(typingTimer.current);
         if (socket && activeConv?.id) {
           socket.emit('chat:leave', { conversationId: activeConv.id });
         }
@@ -136,6 +161,7 @@ export default function ChatPage() {
     }
   }, [activeConv?.id, fetchMessages, socket]);
 
+  const seenMessages = useRef(new Set());
   // ── Real-Time Socket.IO Listeners ─────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
@@ -143,6 +169,9 @@ export default function ChatPage() {
     // 1. New Message Received
     const handleNewMessage = (payload) => {
       const { conversationId, message } = payload;
+      if (!message?.id || seenMessages.current.has(message.id)) return;
+      seenMessages.current.add(message.id);
+      if (seenMessages.current.size > 1000) seenMessages.current.delete(seenMessages.current.values().next().value);
 
       // If active conversation, append message and mark read
       if (activeConv?.id === conversationId) {
@@ -150,7 +179,7 @@ export default function ChatPage() {
           if (prev.some((m) => m.id === message.id)) return prev;
           return [...prev, message];
         });
-        setTimeout(() => scrollToBottom(true), 50);
+        if (nearBottom.current) setTimeout(() => scrollToBottom(true), 50);
 
         // If message is from other user, send read ack
         if (message.senderId !== user?.id) {
@@ -260,10 +289,13 @@ export default function ChatPage() {
   const handleSendMessage = async (e) => {
     e?.preventDefault();
     const content = inputText.trim();
-    if (!content || !activeConv?.id || sendingMessage) return;
+    if (!content || !activeConv?.id || sendLock.current) return;
+    sendLock.current = true;
+    const conversationId = activeConv.id;
 
     try {
       setSendingMessage(true);
+      setHistoryError('');
       setInputText('');
 
       // Emit stopped typing
@@ -274,27 +306,31 @@ export default function ChatPage() {
         });
       }
 
-      const res = await chatService.sendMessage(activeConv.id, content);
-      if (res.success) {
+      const res = await chatService.sendMessage(conversationId, content);
+      if (res.success && activeId.current === conversationId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === res.data.id)) return prev;
           return [...prev, res.data];
         });
-        setTimeout(() => scrollToBottom(true), 50);
+        setTimeout(() => { if (activeId.current === conversationId) scrollToBottom(true); }, 50);
 
         // Update conversation in list
         setConversations((prev) =>
           prev.map((c) =>
-            c.id === activeConv.id
-              ? { ...c, lastMessageText: content, lastMessageAt: new Date().toISOString() }
+            c.id === conversationId
+              ? { ...c, lastMessageText: content, lastMessageAt: res.data.createdAt }
               : c
           ).sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
         );
       }
     } catch (err) {
       console.error('Failed to send message:', err);
-      alert(err.response?.data?.message || 'Failed to send message. Are you connected?');
+      if (activeId.current === conversationId) {
+        setHistoryError(err.response?.data?.message || 'Message could not be sent. Your draft has been restored.');
+        setInputText(content);
+      }
     } finally {
+      sendLock.current = false;
       setSendingMessage(false);
     }
   };
@@ -321,18 +357,22 @@ export default function ChatPage() {
 
   // ── Start Chat with an Eligible User ──────────────────────────────────────
   const handleStartChatWithUser = async (otherUserId) => {
+    if (startLocks.current.has(otherUserId)) return;
+    startLocks.current.add(otherUserId);
+    setError('');
     try {
       const res = await chatService.startConversation(otherUserId);
       if (res.success) {
         const conv = res.data;
         setActiveConv(conv);
         setShowNewChatModal(false);
-        fetchConversations();
+        setConversations(prev => prev.some(c => c.id === conv.id) ? prev : [conv, ...prev]);
       }
     } catch (err) {
-      console.error('Cannot start conversation:', err);
-      alert(err.response?.data?.message || 'You can only message connected users.');
-    }
+      const message = err.response?.data?.message || 'You can only message connected users or active mentorship partners.';
+      setError(message);
+      setContactError(message);
+    } finally { startLocks.current.delete(otherUserId); }
   };
 
   // ── Open New Chat Modal & Load Eligible Contacts ──────────────────────────
@@ -340,18 +380,26 @@ export default function ChatPage() {
     setShowNewChatModal(true);
     try {
       setLoadingContacts(true);
+      setContactError('');
       const res = await chatService.getContacts();
       if (res.success) {
         setEligibleContacts(res.data || []);
       }
     } catch (err) {
-      console.error('Failed to load chat contacts:', err);
+      setContactError(err.response?.data?.message || 'Could not load eligible contacts. Please retry.');
     } finally {
       setLoadingContacts(false);
     }
   };
 
+  useEffect(() => {
+    chatService.getContacts().then(res => { if (res.success) setEligibleContacts(res.data || []); }).catch(() => {});
+    return () => clearTimeout(typingTimer.current);
+  }, []);
+
   const filteredConversations = conversations.filter((c) => {
+    if (roleFilter === 'MENTORS' && !eligibleContacts.some(contact => contact.id === c.otherUser?.id && contact.connectionType === 'MENTORSHIP' && contact.role === 'ALUMNI')) return false;
+    if (roleFilter === 'STUDENT' || roleFilter === 'ALUMNI') { if (c.otherUser?.role !== roleFilter) return false; }
     if (!searchFilter.trim()) return true;
     const q = searchFilter.toLowerCase();
     const name = `${c.otherUser?.firstName || ''} ${c.otherUser?.lastName || ''}`.toLowerCase();
@@ -361,47 +409,11 @@ export default function ChatPage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
-      {/* Top Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate(-1)}
-              className="p-2 rounded-xl hover:bg-slate-100 transition-colors text-slate-500"
-              title="Back"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 flex items-center justify-center text-white shadow-sm">
-                <MessageSquare className="w-5 h-5" />
-              </div>
-              <div>
-                <h1 className="text-base font-bold text-slate-900 leading-tight">Messages & Direct Chat</h1>
-                <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Authorized Student–Alumni Network Only</span>
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenNewChatModal}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition border border-indigo-200"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>New Chat</span>
-            </button>
-            <NotificationDropdown align="right" />
-          </div>
-        </div>
-      </header>
-
-      {/* Main Chat Interface */}
-      <div className="max-w-7xl mx-auto w-full flex-1 flex p-4 sm:p-6 gap-5 overflow-hidden" style={{ height: 'calc(100vh - 65px)' }}>
+    <div className={`network-page chat-page ${activeConv ? 'chat-selected' : ''}`}>
+      <NetworkPageHero />
+      <div className="chat-status"><span role="status">{isConnected ? 'Live messaging connected' : 'Live updates reconnecting. You can still send and refresh messages.'}</span><button onClick={handleOpenNewChatModal}><Plus size={16} /> New Chat</button></div>
+      {error && <div className="chat-error" role="alert">{error}<button onClick={fetchConversations}>Retry</button></div>}
+      <div className="chat-workspace">
         {/* Left Sidebar: Conversation List */}
         <div className={`w-full md:w-80 lg:w-96 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col overflow-hidden shrink-0 ${activeConv ? 'hidden md:flex' : 'flex'}`}>
           {/* Search bar & New Chat Action */}
@@ -410,7 +422,7 @@ export default function ChatPage() {
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Search conversations..."
+                aria-label="Search conversations" placeholder="Search conversations..."
                 value={searchFilter}
                 onChange={(e) => setSearchFilter(e.target.value)}
                 className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
@@ -418,6 +430,9 @@ export default function ChatPage() {
             </div>
           </div>
 
+          <div className="chat-role-tabs px-3.5 pb-3" aria-label="Filter conversations">
+            {[['ALL','All'],['STUDENT','Students'],['ALUMNI','Alumni'],['MENTORS','Mentors']].map(([key,label]) => <button key={key} aria-pressed={roleFilter === key} onClick={() => setRoleFilter(key)}>{label}</button>)}
+          </div>
           {/* Conversations Scroll Area */}
           <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
             {loadingConv ? (
@@ -425,9 +440,9 @@ export default function ChatPage() {
             ) : filteredConversations.length === 0 ? (
               <div className="p-8 text-center">
                 <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                <h4 className="text-xs font-bold text-slate-700">No Conversations Yet</h4>
+                <h4 className="text-xs font-bold text-slate-700">{searchFilter || roleFilter !== 'ALL' ? 'No matching conversations' : 'No conversations yet'}</h4>
                 <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] mx-auto">
-                  Only connected alumni and students can message each other.
+                  {searchFilter || roleFilter !== 'ALL' ? 'Try a different name or select All to see your conversations.' : 'Start a conversation with an accepted connection or active mentorship partner.'}
                 </p>
                 <button
                   onClick={handleOpenNewChatModal}
@@ -511,6 +526,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-3 min-w-0">
                   <button
                     onClick={() => setActiveConv(null)}
+                    aria-label="Back to conversations"
                     className="md:hidden p-1.5 rounded-lg text-slate-400 hover:bg-slate-100"
                   >
                     <ArrowLeft className="w-5 h-5" />
@@ -546,7 +562,7 @@ export default function ChatPage() {
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Online
                         </span>
                       ) : (
-                        <span>Offline</span>
+                        <span>{typeof activeConv.otherUser?.isOnline === 'boolean' ? 'Offline' : 'Presence unavailable'}</span>
                       )}
                       <span>•</span>
                       <span className="truncate">
@@ -560,14 +576,15 @@ export default function ChatPage() {
 
                 <div className="flex items-center gap-2">
                   <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 font-medium">
-                    <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> Connected
+                    <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> Authorized chat
                   </span>
                 </div>
               </div>
 
+              {historyError && <div className="chat-error" role="alert">{historyError}<button onClick={() => fetchMessages(activeConv.id)}>Reload history</button></div>}
               {/* Messages Stream */}
-              <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 bg-slate-50/50">
-                {loadingMessages ? (
+              <div ref={streamRef} onScroll={() => { const el = streamRef.current; nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90; }} className="chat-stream flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 bg-slate-50/50">
+                {loadingMessages && messages.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-xs text-slate-400">
                     Loading message history...
                   </div>
@@ -582,9 +599,9 @@ export default function ChatPage() {
                     </p>
                   </div>
                 ) : (
-                  messages.map((msg, idx) => {
+                  [...messages].sort((a,b) => new Date(a.createdAt)-new Date(b.createdAt)).map((msg, idx, sorted) => {
                     const isMe = msg.senderId === user?.id;
-                    const prevMsg = messages[idx - 1];
+                    const prevMsg = sorted[idx - 1];
                     const isSameSenderAsPrev = prevMsg && prevMsg.senderId === msg.senderId;
 
                     return (
@@ -595,8 +612,8 @@ export default function ChatPage() {
                         <div
                           className={`max-w-[78%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-xs leading-relaxed shadow-2xs break-words ${
                             isMe
-                              ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-br-xs'
-                              : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-xs'
+                              ? 'chat-outgoing bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-br-xs'
+                              : 'chat-incoming bg-white text-slate-800 border border-slate-200/80 rounded-bl-xs'
                           }`}
                         >
                           <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -622,6 +639,7 @@ export default function ChatPage() {
                   })
                 )}
 
+                {historyPage > 1 && <button className="chat-more" disabled={loadingMessages} onClick={() => fetchMessages(activeConv.id, historyPage - 1)}>Load earlier messages</button>}
                 {/* Real-time Typing Bubble */}
                 {isOtherTyping && (
                   <div className="flex items-center gap-2 text-xs text-slate-400 italic mt-2 animate-pulse">
@@ -634,8 +652,10 @@ export default function ChatPage() {
 
               {/* Chat Input Bar */}
               <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-100 flex items-center gap-2">
-                <input
-                  type="text"
+                <textarea
+                  rows={2}
+                  aria-label="Message text"
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSendMessage(); } }}
                   placeholder={`Message ${activeConv.otherUser?.firstName || ''}...`}
                   value={inputText}
                   onChange={(e) => handleInputChange(e.target.value)}
@@ -644,6 +664,7 @@ export default function ChatPage() {
                 />
                 <button
                   type="submit"
+                  aria-label={sendingMessage ? "Sending message" : "Send message"}
                   disabled={!inputText.trim() || sendingMessage}
                   className="p-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl transition shadow-xs flex items-center justify-center shrink-0"
                 >
@@ -673,7 +694,7 @@ export default function ChatPage() {
 
       {/* New Chat Modal: Shows ONLY Authorized/Connected Contacts */}
       {showNewChatModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div role="dialog" aria-modal="true" aria-label="Start a conversation" className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl max-w-md w-full border border-slate-200 shadow-2xl p-5 relative animate-fadeIn flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div>
@@ -681,6 +702,7 @@ export default function ChatPage() {
                 <p className="text-xs text-slate-400">Select a connected alumni or student partner</p>
               </div>
               <button
+                aria-label="Close new chat"
                 onClick={() => setShowNewChatModal(false)}
                 className="text-slate-400 hover:text-slate-600 text-xl font-bold"
               >
@@ -689,6 +711,7 @@ export default function ChatPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto py-3 space-y-2">
+              {contactError && <div className="chat-error" role="alert">{contactError}<button onClick={handleOpenNewChatModal}>Retry</button></div>}
               {loadingContacts ? (
                 <div className="text-center py-8 text-xs text-slate-400">Loading eligible contacts...</div>
               ) : eligibleContacts.length === 0 ? (

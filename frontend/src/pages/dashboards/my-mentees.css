@@ -1,0 +1,264 @@
+.mm-page {
+  display: grid;
+  gap: 24px;
+}
+.mm-hero {
+  min-height: 200px;
+}
+.mm-art {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  color: #7960e7;
+}
+.mm-art > span {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 105px;
+  border-radius: 38px 38px 18px 18px;
+  background: linear-gradient(140deg, #c6cbfa, #e7deff);
+  box-shadow: 0 6px 15px #8e87df20;
+  transform: rotate(-8deg);
+}
+.mm-art > span:last-child {
+  transform: rotate(7deg);
+  background: linear-gradient(130deg, #c2e9fc, #cbc9ff);
+}
+.mm-art > svg {
+  position: absolute;
+  top: -15px;
+  left: 70px;
+  color: #6e53da;
+  background: #eeeaff;
+  padding: 8px;
+  border-radius: 14px;
+  box-sizing: content-box;
+}
+.mm-stat {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: #ffffffbb;
+  padding: 24px 28px;
+  border-radius: 20px;
+  min-width: 220px;
+}
+.mm-stat > span {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  background: #dff8f1;
+  border-radius: 15px;
+  color: #17a58c;
+}
+.mm-stat strong {
+  font-size: 25px;
+  font-weight: 850;
+}
+.mm-stat p {
+  font-size: 12px;
+  color: #566482;
+  margin-top: 5px;
+}
+.mm-list {
+  display: grid;
+  gap: 22px;
+}
+.mm-card {
+  padding: 27px;
+}
+.mm-card .mi-note {
+  min-height: 65px;
+  align-items: center;
+}
+.mm-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.mm-date {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #647395;
+  font-size: 12px;
+}
+.mm-date span,
+.mm-date time {
+  display: block;
+  line-height: 1.6;
+}
+.mm-menu {
+  position: relative;
+}
+.mm-menu summary {
+  list-style: none;
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  border-radius: 12px;
+  background: #f5f3ff;
+  color: #6550ce;
+  cursor: pointer;
+}
+.mm-menu summary::-webkit-details-marker {
+  display: none;
+}
+.mm-menu > div {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 210px;
+  border: 1px solid #e5e7f4;
+  border-radius: 14px;
+  padding: 7px;
+  background: white;
+  box-shadow: 0 10px 25px #3b477e25;
+  z-index: 10;
+}
+.mm-menu button,
+.mm-menu a {
+  display: block;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #56627c;
+  text-align: left;
+  width: 100%;
+}
+.mm-menu :is(button, a):hover {
+  background: #f3f1ff;
+  color: #6648cd;
+}
+.mm-menu summary:focus-visible {
+  outline: 3px solid #7050dc;
+  outline-offset: 3px;
+}
+.mm-actions {
+  display: flex;
+  gap: 20px;
+  margin-top: 22px;
+}
+.mm-actions a,
+.mm-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-size: 13px;
+  padding: 14px 22px;
+  border-radius: 13px;
+}
+.mm-actions > a {
+  flex: 1;
+}
+.mm-actions > button {
+  min-width: 235px;
+}
+.mm-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.mm-search {
+  max-width: 600px;
+}
+.mm-search input {
+  width: 100%;
+}
+.mm-confirm {
+  background: white;
+  position: relative;
+  padding: 30px;
+  max-width: 490px;
+  width: 100%;
+  border-radius: 22px;
+  box-shadow: 0 20px 60px #19234435;
+  max-height: 90vh;
+  overflow: auto;
+}
+.mm-confirm-icon {
+  display: grid;
+  place-items: center;
+  color: #7e51e4;
+  background: #f0eaff;
+  border-radius: 18px;
+  width: 60px;
+  height: 60px;
+  margin-bottom: 20px;
+}
+.mm-confirm h2 {
+  font-size: 21px;
+  font-weight: 800;
+  margin-bottom: 12px;
+}
+.mm-confirm p {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #687591;
+  margin: 10px 0;
+}
+.mm-confirm strong {
+  color: #343d61;
+}
+.mm-close {
+  position: absolute;
+  top: 17px;
+  right: 17px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #f5f6fa;
+}
+.mm-confirm-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+.mm-confirm-actions button {
+  flex: 1;
+  font-size: 12px;
+}
+.mm-confirm button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+@media (max-width: 1200px) {
+  .mm-art {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .mm-hero {
+    gap: 20px;
+  }
+  .mm-stat {
+    width: 100%;
+    padding: 18px 22px;
+  }
+  .mm-card {
+    padding: 18px;
+  }
+  .mm-card-tools {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .mm-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .mm-actions button {
+    min-width: 0;
+  }
+  .mm-confirm {
+    padding: 25px;
+  }
+  .mm-confirm-actions {
+    flex-direction: column;
+  }
+  .mm-art {
+    display: none;
+  }
+}
