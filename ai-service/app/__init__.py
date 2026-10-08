@@ -1,0 +1,1 @@
+"""AlumniConnect AI Service Package."""

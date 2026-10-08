@@ -1,0 +1,627 @@
+// Prisma schema file for AlumniConnect platform
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// User role enum to support platform roles
+enum Role {
+  STUDENT
+  ALUMNI
+  ADMIN
+}
+
+// Connection request status
+enum ConnectionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+// Mentorship request status
+enum MentorshipStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+// Job employment type enum
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  INTERNSHIP
+  CONTRACT
+  REMOTE
+}
+
+// Job posting status enum
+enum JobStatus {
+  ACTIVE
+  CLOSED
+  DRAFT
+}
+
+// Job application workflow status enum
+enum ApplicationStatus {
+  PENDING
+  REVIEWING
+  SHORTLISTED
+  INTERVIEW
+  SELECTED
+  REJECTED
+  WITHDRAWN
+}
+
+// Event type enum
+enum EventType {
+  WEBINAR
+  WORKSHOP
+  NETWORKING
+  SEMINAR
+  PANEL_DISCUSSION
+}
+
+// Event status enum
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+// Event registration status enum
+enum RegistrationStatus {
+  REGISTERED
+  ATTENDED
+  CANCELLED
+}
+
+// Notification types
+enum NotificationType {
+  CONNECTION_REQUEST
+  CONNECTION_ACCEPTED
+  CONNECTION_REJECTED
+  MENTORSHIP_REQUEST
+  MENTORSHIP_ACCEPTED
+  MENTORSHIP_REJECTED
+  MENTORSHIP_COMPLETED
+  JOB_APPLICATION_SUBMITTED
+  JOB_APPLICATION_STATUS_UPDATED
+  JOB_POSTED
+  JOB_CLOSED
+  EVENT_CREATED
+  EVENT_UPDATED
+  EVENT_REGISTERED
+  EVENT_REMINDER
+  EVENT_ANNOUNCEMENT
+  MESSAGE
+  SYSTEM
+  COMMUNITY_JOIN
+  COMMUNITY_POST
+  COMMUNITY_COMMENT
+  COMMUNITY_MEMBER_LEAVE
+  COMMUNITY_MEMBER_ROLE
+  COMMUNITY_MEMBER_REMOVE
+}
+
+// Core User model for authentication and user management
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         Role      @default(STUDENT)
+  firstName    String    @map("first_name")
+  lastName     String    @map("last_name")
+  phone        String?
+  profilePhoto String?   @map("profile_photo")
+  isApproved   Boolean   @default(false) @map("is_approved")
+  isVerified   Boolean   @default(false) @map("is_verified")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+
+  // One-to-one profile relations
+  studentProfile StudentProfile?
+  alumniProfile  AlumniProfile?
+
+  // Connection relations
+  sentConnections     Connection[] @relation("SentConnections")
+  receivedConnections Connection[] @relation("ReceivedConnections")
+
+  // Mentorship request relations
+  sentMentorshipRequests     MentorshipRequest[] @relation("StudentMentorshipRequests")
+  receivedMentorshipRequests MentorshipRequest[] @relation("AlumniMentorshipRequests")
+
+  // Job posting & application relations
+  postedJobs      Job[]            @relation("AlumniPostedJobs")
+  jobApplications JobApplication[] @relation("StudentJobApplications")
+
+  // Event relations
+  createdEvents      Event[]             @relation("CreatedEvents")
+  eventRegistrations EventRegistration[] @relation("UserEventRegistrations")
+  communityPosts     EventCommunityPost[] @relation("UserCommunityPosts")
+  eventRecordings    EventRecording[]     @relation("UserEventRecordings")
+
+  // Community relations
+  createdCommunities        Community[]        @relation("CreatedCommunities")
+  communityMemberships      CommunityMember[]  @relation("CommunityMemberships")
+  authoredCommunityPosts    CommunityPost[]    @relation("CommunityPosts")
+  authoredCommunityComments CommunityComment[] @relation("CommunityComments")
+
+  // Notification relations
+  notifications          Notification[] @relation("ReceivedNotifications")
+  triggeredNotifications Notification[] @relation("TriggeredNotifications")
+
+  @@index([email])
+  @@index([role])
+  @@index([isApproved])
+  @@map("users")
+}
+
+// Student Profile model containing student-specific information
+model StudentProfile {
+  id               String   @id @default(uuid())
+  userId           String   @unique @map("user_id")
+  college          String?
+  degree           String?
+  branch           String?
+  currentYear      Int?     @map("current_year")
+  batch            String?
+  graduationYear   Int?     @map("graduation_year")
+  cgpa             Decimal? @db.Decimal(3, 2) @map("cgpa")
+  careerGoal       String?  @map("career_goal")
+  preferredDomain  String?  @map("preferred_domain")
+  preferredRole    String?  @map("preferred_role")
+  preferredCompany String?  @map("preferred_company")
+  technicalSkills  String[] @default([]) @map("technical_skills")
+  tools            String[] @default([])
+  domainInterests  String[] @default([]) @map("domain_interests")
+  careerInterests  String[] @default([]) @map("career_interests")
+  linkedinUrl      String?  @map("linkedin_url")
+  githubUrl        String?  @map("github_url")
+  portfolioUrl     String?  @map("portfolio_url")
+  skills           String[] @default([])
+  interests        String[] @default([])
+  location         String?
+  resumeUrl        String?  @map("resume_url")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relation to User
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([branch])
+  @@index([graduationYear])
+  @@map("student_profiles")
+}
+
+// Alumni Profile model containing professional and background details
+model AlumniProfile {
+  id                  String   @id @default(uuid())
+  userId              String   @unique @map("user_id")
+  graduationYear      Int?     @map("graduation_year")
+  branch              String?
+  currentCompany      String?  @map("current_company")
+  jobRole             String?  @map("job_role")
+  yearsOfExperience   Int?     @map("years_of_experience")
+  domain              String?
+  skills              String[] @default([])
+  location            String?
+  linkedinUrl         String?  @map("linkedin_url")
+  githubUrl           String?  @map("github_url")
+  mentorshipAvailable Boolean  @default(false) @map("mentorship_available")
+  areasOfExpertise    String[] @default([]) @map("areas_of_expertise")
+  resumeUrl           String?  @map("resume_url")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Relation to User
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Career history entries
+  previousCompanies AlumniPreviousCompany[]
+
+  @@index([userId])
+  @@index([currentCompany])
+  @@index([domain])
+  @@index([mentorshipAvailable])
+  @@map("alumni_profiles")
+}
+
+// Alumni Previous Company model for career history entries
+model AlumniPreviousCompany {
+  id              String        @id @default(uuid())
+  alumniProfileId String        @map("alumni_profile_id")
+  companyName     String        @map("company_name")
+  jobRole         String?       @map("job_role")
+  domain          String?       @map("domain")
+  startYear       Int?          @map("start_year")
+  endYear         Int?          @map("end_year")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relation to AlumniProfile
+  alumniProfile AlumniProfile @relation(fields: [alumniProfileId], references: [id], onDelete: Cascade)
+
+  @@index([alumniProfileId])
+  @@map("alumni_previous_companies")
+}
+
+// Real Student-Alumni Connection Request model
+model Connection {
+  id         String           @id @default(uuid())
+  senderId   String           @map("sender_id")
+  receiverId String           @map("receiver_id")
+  status     ConnectionStatus @default(PENDING)
+  message    String?
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  sender   User @relation("SentConnections", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedConnections", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("connections")
+}
+
+// Dedicated Mentorship Request Workflow model
+model MentorshipRequest {
+  id           String           @id @default(uuid())
+  studentId    String           @map("student_id")
+  alumniId     String           @map("alumni_id")
+  status       MentorshipStatus @default(PENDING)
+  topic        String?
+  goals        String?
+  message      String
+  responseNote String?          @map("response_note")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  student User @relation("StudentMentorshipRequests", fields: [studentId], references: [id], onDelete: Cascade)
+  alumni  User @relation("AlumniMentorshipRequests", fields: [alumniId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([alumniId])
+  @@index([status])
+  @@map("mentorship_requests")
+}
+
+// Real PostgreSQL Job model for Alumni Job Postings
+model Job {
+  id               String           @id @default(uuid())
+  alumniId         String           @map("alumni_id")
+  company          String
+  title            String           @map("job_role")
+  location         String
+  employmentType   EmploymentType   @default(FULL_TIME) @map("employment_type")
+  workplaceType    String?          @default("On-site") @map("workplace_type") // On-site, Remote, Hybrid
+  description      String           @db.Text
+  requirements     String?          @db.Text
+  skills           String[]         @default([])
+  minExperience    Int?             @default(0) @map("min_experience")
+  minCgpa          Decimal?         @db.Decimal(3, 2) @map("min_cgpa")
+  eligibleBranches String[]         @default([]) @map("eligible_branches")
+  eligibleBatches  Int[]            @default([]) @map("eligible_batches")
+  salary           String?          @map("salary")
+  deadline         DateTime?
+  status           JobStatus        @default(ACTIVE)
+  externalApplyUrl String?          @map("external_apply_url")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  alumni           User             @relation("AlumniPostedJobs", fields: [alumniId], references: [id], onDelete: Cascade)
+  applications     JobApplication[]
+
+  @@index([alumniId])
+  @@index([status])
+  @@index([company])
+  @@index([employmentType])
+  @@index([deadline])
+  @@map("jobs")
+}
+
+// Real PostgreSQL JobApplication model for Student Job Applications
+model JobApplication {
+  id            String            @id @default(uuid())
+  jobId         String            @map("job_id")
+  studentId     String            @map("student_id")
+  status        ApplicationStatus @default(PENDING)
+  resumeUrl     String?           @map("resume_url")
+  coverLetter   String?           @map("cover_letter") @db.Text
+  portfolioUrl  String?           @map("portfolio_url")
+  linkedinUrl   String?           @map("linkedin_url")
+  reviewNotes   String?           @map("review_notes") @db.Text
+  interviewDate DateTime?         @map("interview_date")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  job           Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  student       User              @relation("StudentJobApplications", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, studentId])
+  @@index([jobId])
+  @@index([studentId])
+  @@index([status])
+  @@map("job_applications")
+}
+
+// Persistent Notification model stored in PostgreSQL
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  actorId   String?          @map("actor_id")
+  type      NotificationType @default(SYSTEM)
+  title     String
+  message   String
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  user  User  @relation("ReceivedNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("TriggeredNotifications", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// Real PostgreSQL Event model for Webinars, Workshops, and Seminars
+model Event {
+  id                   String      @id @default(uuid())
+  creatorId            String      @map("creator_id")
+  title                String
+  description          String      @db.Text
+  type                 EventType   @default(WEBINAR)
+  status               EventStatus @default(PUBLISHED)
+  speakerName          String      @map("speaker_name")
+  speakerRole          String?     @map("speaker_role")
+  speakerCompany       String?     @map("speaker_company")
+  speakerBio           String?     @map("speaker_bio") @db.Text
+  startDate            DateTime    @map("start_date")
+  endDate              DateTime    @map("end_date")
+  location             String      @default("Online Webinar")
+  meetingUrl           String?     @map("meeting_url")
+  maxCapacity          Int?        @map("max_capacity")
+  registrationDeadline DateTime?   @map("registration_deadline")
+  tags                 String[]    @default([])
+  bannerUrl            String?     @map("banner_url")
+  isFeatured           Boolean     @default(false) @map("is_featured")
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  creator        User                 @relation("CreatedEvents", fields: [creatorId], references: [id], onDelete: Cascade)
+  registrations  EventRegistration[]
+  communityPosts EventCommunityPost[]
+  recording      EventRecording?
+
+  @@index([creatorId])
+  @@index([status])
+  @@index([type])
+  @@index([startDate])
+  @@map("events")
+}
+
+// Real PostgreSQL EventRegistration model for participant registrations
+model EventRegistration {
+  id            String             @id @default(uuid())
+  eventId       String             @map("event_id")
+  userId        String             @map("user_id")
+  status        RegistrationStatus @default(REGISTERED)
+  feedbackNotes String?            @map("feedback_notes") @db.Text
+  rating        Int?
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  // Relations
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation("UserEventRegistrations", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@index([status])
+  @@map("event_registrations")
+}
+
+// Real PostgreSQL EventCommunityPost model for Event Community (Announcements, Reminders, Resources, Discussions)
+model EventCommunityPost {
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  authorId  String   @map("author_id")
+  type      String   @default("DISCUSSION") // ANNOUNCEMENT, REMINDER, RESOURCE, DISCUSSION, MEETING_LINK
+  title     String?
+  content   String   @db.Text
+  linkUrl   String?  @map("link_url")
+  tags      String[] @default([])
+  isPinned  Boolean  @default(false) @map("is_pinned")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  event  Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  author User  @relation("UserCommunityPosts", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([authorId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("event_community_posts")
+}
+
+// Real PostgreSQL EventRecording model for Post-Webinar Recording, Transcript, AI Extraction & RAG
+model EventRecording {
+  id              String   @id @default(uuid())
+  eventId         String   @unique @map("event_id")
+  uploaderId      String   @map("uploader_id")
+  recordingUrl    String?  @map("recording_url")
+  recordingType   String   @default("LINK") // LINK, FILE
+  videoFileName   String?  @map("video_file_name")
+  transcript      String?  @db.Text
+  summary         String?  @db.Text
+  keyTakeaways    String[] @default([]) @map("key_takeaways")
+  qaPairs         Json?    @map("qa_pairs") // [{ question: string, answer: string }]
+  actionItems     String[] @default([]) @map("action_items")
+  ragChunks       Json?    @map("rag_chunks") // [{ chunkId, title, content, keywords }]
+  status          String   @default("COMPLETED") // PROCESSING, COMPLETED, FAILED
+  durationMinutes Int?     @map("duration_minutes")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  event    Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  uploader User  @relation("UserEventRecordings", fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([uploaderId])
+  @@map("event_recordings")
+}
+
+// Community member role enum
+enum CommunityRole {
+  MEMBER
+  MODERATOR
+  ADMIN
+}
+
+// Community member status enum
+enum CommunityMemberStatus {
+  PENDING
+  ACTIVE
+  LEFT
+  BANNED
+}
+
+// Community post type enum
+enum CommunityPostType {
+  DISCUSSION
+  ANNOUNCEMENT
+  RESOURCE
+  QUESTION
+}
+
+// Domain / Career Community model
+model Community {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  domain      String?
+  careerFocus String?  @map("career_focus")
+  tags        String[] @default([])
+  avatarUrl   String?  @map("avatar_url")
+  bannerUrl   String?  @map("banner_url")
+  isPrivate   Boolean  @default(false) @map("is_private")
+  requiresApproval Boolean @default(false) @map("requires_approval")
+  maxMembers  Int?     @map("max_members")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  creator    User             @relation("CreatedCommunities", fields: [creatorId], references: [id], onDelete: Cascade)
+  creatorId  String           @map("creator_id")
+  members    CommunityMember[]
+  posts      CommunityPost[]
+
+  @@index([domain])
+  @@index([careerFocus])
+  @@index([slug])
+  @@map("communities")
+}
+
+// Community membership model (prevents duplicate memberships via unique constraint)
+model CommunityMember {
+  id          String              @id @default(uuid())
+  communityId String              @map("community_id")
+  userId      String              @map("user_id")
+  role        CommunityRole       @default(MEMBER)
+  status      CommunityMemberStatus @default(ACTIVE)
+  joinedAt    DateTime            @default(now()) @map("joined_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user      User      @relation("CommunityMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+  @@index([communityId])
+  @@index([userId])
+  @@index([communityId, role])
+  @@index([communityId, status])
+  @@map("community_members")
+}
+
+// Community post model
+model CommunityPost {
+  id         String           @id @default(uuid())
+  communityId String          @map("community_id")
+  authorId   String           @map("author_id")
+  type       CommunityPostType @default(DISCUSSION)
+  title      String
+  content    String           @db.Text
+  linkUrl    String?          @map("link_url")
+  tags       String[]         @default([])
+  isPinned   Boolean          @default(false) @map("is_pinned")
+  isLocked   Boolean          @default(false) @map("is_locked")
+  viewCount  Int              @default(0) @map("view_count")
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  community Community        @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  author    User             @relation("CommunityPosts", fields: [authorId], references: [id], onDelete: Cascade)
+  comments  CommunityComment[]
+
+  @@index([communityId])
+  @@index([authorId])
+  @@index([type])
+  @@index([communityId, isPinned])
+  @@index([communityId, createdAt])
+  @@map("community_posts")
+}
+
+// Community comment model (supports threaded replies)
+model CommunityComment {
+  id        String    @id @default(uuid())
+  postId    String    @map("post_id")
+  authorId  String    @map("author_id")
+  parentId  String?   @map("parent_id")
+  content   String    @db.Text
+  isEdited  Boolean   @default(false) @map("is_edited")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  post    CommunityPost   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author  User            @relation("CommunityComments", fields: [authorId], references: [id], onDelete: Cascade)
+  parent  CommunityComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies CommunityComment[] @relation("CommentReplies")
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([postId, createdAt])
+  @@map("community_comments")
+}
+
