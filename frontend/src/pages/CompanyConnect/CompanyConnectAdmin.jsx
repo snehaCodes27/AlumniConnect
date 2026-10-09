@@ -1,396 +1,211 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import api from '../../services/api';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, Link } from 'react-router-dom';
+import { Building2, Plus, RefreshCw, Search, Send, Users, CalendarDays } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
-import './CompanyConnect.css';
-
+import api from '../../services/api';
+import { AdminDialog, AdminEmpty, AdminError, AdminLoading, AdminPager } from '../../components/AdminUI';
+import './company-connect-v2.css';
+import CompanyConnectWorkflow from './CompanyConnectWorkflow';
+const initial = {
+  companyName: '',
+  driveDate: '',
+  minCgpa: '0',
+  eligibleBranches: '',
+  eligibleYears: '',
+  webinarLink: ''
+};
+const err = e => e.response?.data?.message || e.response?.data?.error || e.message;
+function LocalPager({
+  items,
+  page,
+  onPage,
+  size = 6
+}) {
+  return items.length > size && <AdminPager pagination={{
+    page,
+    total: items.length,
+    totalPages: Math.ceil(items.length / size)
+  }} onPage={onPage} />;
+}
 export default function CompanyConnectAdmin() {
-  const { socket } = useSocket();
-  const [step, setStep] = useState(0); // 0=idle, 1=searching, 2=found, 3=invited, 4=accepted, 5=notified
-  const [prompt, setPrompt] = useState('');
-  const [drive, setDrive] = useState(null);
-  const [driveId, setDriveId] = useState(null);
-  const [foundAlumni, setFoundAlumni] = useState([]);
-  const [selectedAlumni, setSelectedAlumni] = useState([]);
-  const [companyName, setCompanyName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [log, setLog] = useState([]);
-  const [botTyping, setBotTyping] = useState(false);
-
-  const addLog = (msg, type = 'info') => {
-    setLog((prev) => [...prev, { msg, type, time: new Date().toLocaleTimeString() }]);
-  };
-
-  // Load first active drive on mount
-  useEffect(() => {
-    api.get('/company-connect/drives')
-      .then((res) => {
-        const drives = res.data?.drives || [];
-        if (drives.length > 0) {
-          const active = drives.find(d => d.status !== 'STUDENTS_NOTIFIED') || drives[0];
-          setDrive(active);
-          setDriveId(active.id);
-          const d = active;
-          if (d.registeredStudents?.length > 0) setStep(5);
-          else if (d.acceptedAlumni?.length > 0) setStep(4);
-          else if (d.invitedAlumni?.length > 0) setStep(3);
-          else if (d.status !== 'ANNOUNCED') setStep(1);
-        }
-      })
-      .catch(() => {});
+  const {
+      socket
+    } = useSocket(),
+    location = useLocation();
+  const [drives, setDrives] = useState([]),
+    [driveId, setDriveId] = useState(''),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(''),
+    [tab, setTab] = useState('overview'),
+    [search, setSearch] = useState(''),
+    [matches, setMatches] = useState([]),
+    [selected, setSelected] = useState([]),
+    [searched, setSearched] = useState(false),
+    [searchContext, setSearchContext] = useState(null),
+    [searching, setSearching] = useState(false),
+    [page, setPage] = useState(1),
+    [dialog, setDialog] = useState(null),
+    [form, setForm] = useState(initial),
+    [busy, setBusy] = useState(false),
+    [actionError, setActionError] = useState(''),
+    [notice, setNotice] = useState(''),
+    [emailConfigured, setEmailConfigured] = useState(null);
+  const seq = useRef(0),
+    searchSeq = useRef(0),
+    lock = useRef(false);
+  const drive = drives.find(d => d.id === driveId);
+  const load = useCallback(async () => {
+    const id = ++seq.current;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await api.get('/company-connect/drives');
+      if (id === seq.current) {
+        setDrives(res.data.drives || []);
+        setEmailConfigured(res.data.emailConfigured);
+        setDriveId(current => res.data.drives.some(d => d.id === current) ? current : res.data.drives[0]?.id || '');
+      }
+    } catch (e) {
+      if (id === seq.current) setError(err(e));
+    } finally {
+      if (id === seq.current) setLoading(false);
+    }
   }, []);
-
-  // Real-time socket listeners
+  useEffect(() => {
+    load();
+    return () => {
+      seq.current++;
+      searchSeq.current++;
+    };
+  }, [load]);
   useEffect(() => {
     if (!socket) return;
-
-    const handleAlumniAccepted = (data) => {
-      addLog(`🎉 Alumni ${data.alumniName || 'Mentor'} accepted guidance invitation!`, 'success');
-      setStep((prev) => Math.max(prev, 4));
-      refreshDrive();
-    };
-
-    const handleStudentsNotified = (data) => {
-      addLog(`📢 Notification broadcasted to ${data.studentCount} students.`, 'info');
-      refreshDrive();
-    };
-
-    const handleStudentRegistered = (data) => {
-      addLog(`🎓 Student ${data.studentName || 'New student'} registered (${data.status}).`, 'info');
-      refreshDrive();
-    };
-
-    socket.on('company_connect:alumni_accepted', handleAlumniAccepted);
-    socket.on('company_connect:students_notified', handleStudentsNotified);
-    socket.on('company_connect:student_registered', handleStudentRegistered);
-
-    return () => {
-      socket.off('company_connect:alumni_accepted', handleAlumniAccepted);
-      socket.off('company_connect:students_notified', handleStudentsNotified);
-      socket.off('company_connect:student_registered', handleStudentRegistered);
-    };
-  }, [socket]);
-
-  // Step 1: Admin types prompt → Bot searches alumni
-  const handleAISearch = async () => {
-    if (!prompt.trim()) return;
-    setLoading(true);
-    setBotTyping(true);
-    addLog(`🤖 AI received prompt: "${prompt}"`, 'ai');
-
-    setTimeout(async () => {
-      try {
-        setBotTyping(false);
-        addLog('🔍 AI searching alumni database...', 'ai');
-        const res = await api.post('/company-connect/search-alumni', { prompt });
-        const alumni = res.data.alumni;
-        setFoundAlumni(alumni);
-        setSelectedAlumni(alumni.map((a) => a.id));
-        setCompanyName(res.data.searchTerm || companyName);
-        setStep(2);
-        addLog(`✅ Found ${alumni.length} alumni matching "${res.data.searchTerm}"`, 'success');
-      } catch (err) {
-        addLog(`❌ Search failed: ${err.message}`, 'error');
-      }
-      setLoading(false);
-    }, 1500);
-  };
-
-  // Step 2: 1-Click send invites to selected alumni (auto-creates drive + sends email)
-  const handleSendInvites = async () => {
-    setLoading(true);
-    addLog(`📨 1-Click: Creating drive + sending email + SMS to ${selectedAlumni.length} alumni...`, 'info');
+    const events = ['company_connect:alumni_accepted', 'company_connect:students_notified', 'company_connect:student_registered', 'company_connect:invites_sent', 'connect'];
+    events.forEach(e => socket.on(e, load));
+    return () => events.forEach(e => socket.off(e, load));
+  }, [socket, load]);
+  useEffect(() => {
+    searchSeq.current++;
+    setSearching(false);
+    setPage(1);
+    setMatches([]);
+    setSelected([]);
+    setSearched(false);
+    setSearch(drive?.companyName || new URLSearchParams(location.search).get('company') || '');
+  }, [driveId, location.search]);
+  const runSearch = async (company = search) => {
+    if (!company.trim()) return;
+    setSearch(company);setTab('alumni');
+    const id = ++searchSeq.current;
+    setSearching(true);
+    setActionError('');
     try {
-      const res = await api.post('/company-connect/search-invite', {
-        companyName: companyName,
-        alumniIds: selectedAlumni,
+      const res = await api.post('/company-connect/search-alumni', {
+        companyName: company.trim()
       });
-      const { drive: newDrive, invited } = res.data;
-      if (newDrive) {
-        setDrive(newDrive);
-        setDriveId(newDrive.id);
+      if (id === searchSeq.current) {
+        setMatches(res.data.alumni || []);
+        setSearchContext(res.data.context);
+        setSelected([]);
+        setSearched(true);
+        setPage(1);
       }
-      addLog(`✅ 1-Click done! Email + SMS sent to ${invited?.length || selectedAlumni.length} alumni.`, 'success');
-      addLog(`📧 Alumni received 1-click Accept link in email — they can accept directly from inbox.`, 'ai');
-      setStep(3);
-    } catch (err) {
-      addLog(`❌ ${err.response?.data?.error || err.message}`, 'error');
-    }
-    setLoading(false);
-  };
-
-  // Step 3: Broadcast to all students
-  const handleBroadcastStudents = async () => {
-    if (!driveId) return;
-    setLoading(true);
-    addLog('📢 Broadcasting to all eligible students via Email + SMS + In-App Notification...', 'info');
-    try {
-      const res = await api.post('/company-connect/broadcast-students', { driveId });
-      addLog(`✅ Notified ${res.data.notifiedCount} students via Email + SMS!`, 'success');
-      addLog(`📧 Placement drive email sent to all students. Check inboxes (may be in Spam).`, 'ai');
-      setStep(5);
-    } catch (err) {
-      addLog(`❌ ${err.response?.data?.error || err.message}`, 'error');
-    }
-    setLoading(false);
-  };
-
-  const refreshDrive = async () => {
-    if (!driveId) return;
-    try {
-      const res = await api.get(`/company-connect/drives/${driveId}`);
-      const updatedDrive = res.data.drive;
-      setDrive(updatedDrive);
-      setStep((prev) => {
-        if (updatedDrive.registeredStudents?.length > 0) return Math.max(prev, 5);
-        if (updatedDrive.acceptedAlumni?.length > 0) {
-          if (prev < 4) {
-            addLog(`🎉 Alumni accepted! ${updatedDrive.acceptedAlumni.map((a) => a.name).join(', ')} ready to guide.`, 'success');
-          }
-          return Math.max(prev, 4);
-        }
-        if (updatedDrive.invitedAlumni?.length > 0) return Math.max(prev, 3);
-        return prev;
-      });
     } catch (e) {
-      console.warn('[refreshDrive error]', e.message);
+      if (id === searchSeq.current) setActionError(err(e));
+    } finally {
+      if (id === searchSeq.current) setSearching(false);
     }
   };
-
-  const steps = [
-    { label: 'Placement Announced', icon: '🏢' },
-    { label: 'AI Alumni Search', icon: '🤖' },
-    { label: 'Alumni Found', icon: '👥' },
-    { label: 'Invites Sent', icon: '📨' },
-    { label: 'Alumni Accepted', icon: '✅' },
-    { label: 'Students Notified', icon: '📢' },
-  ];
-
-  const handleResetDemo = async () => {
+  const perform = async kind => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setActionError('');
     try {
-      await api.post('/company-connect/reset', { driveId: driveId || undefined });
-      setStep(0);
-      setDrive(null);
-      setDriveId(null);
-      setFoundAlumni([]);
-      setSelectedAlumni([]);
-      setCompanyName('');
-      setLog([]);
-      addLog('🔄 Demo state reset to initial state.', 'info');
-    } catch (err) {
-      addLog(`❌ Reset failed: ${err.message}`, 'error');
-    }
-  };
-
-  const handleTestEmail = async () => {
-    addLog('📧 Sending test email to admin inbox...', 'info');
-    try {
-      const res = await api.post('/company-connect/test-email');
-      if (res.data.success) {
-        addLog(`✅ ${res.data.message}`, 'success');
+      let response;
+      if (kind === 'create') {
+        const body = {
+          ...form,
+          minCgpa: Number(form.minCgpa),
+          eligibleBranches: form.eligibleBranches.split(',').map(s => s.trim()).filter(Boolean),
+          eligibleYears: form.eligibleYears.split(',').map(s => s.trim()).filter(Boolean).map(Number)
+        };
+        response = await api.post('/company-connect/drives', body);
+        setDriveId(response.data.drive.id);
+        setNotice('Drive saved to PostgreSQL.');
+      } else if (kind === 'invite' || kind === 'retry') {
+        response = await api.post(kind === 'retry' ? '/company-connect/retry-invite-emails' : '/company-connect/send-invites', {
+          driveId,
+          alumniIds: selected
+        });
+        const sent = response.data.invited || [];
+        setNotice(`${sent.length} new in-app invitations saved; ${response.data.skipped} already invited. Email sent: ${sent.filter(i => i.delivery?.email === 'sent').length}. Delivery details appear in invitation records.`);
+        setSelected([]);
+      } else if (kind === 'broadcast') {
+        response = await api.post('/company-connect/broadcast-students', {
+          driveId
+        });
+        setNotice(response.data.alreadyNotified ? 'Students have already been notified. No duplicate notifications sent.' : `${response.data.notifiedCount} student in-app announcements saved. Email sent: ${response.data.delivery?.filter(d => d.email === 'sent').length || 0}.`);
       } else {
-        addLog(`❌ Email failed: ${res.data.error}`, 'error');
+        await api.patch(`/company-connect/drives/${driveId}/close`);
+        setNotice('Drive closed. Existing registrations remain available.');
       }
-    } catch (err) {
-      addLog(`❌ Email error: ${err.response?.data?.error || err.message}`, 'error');
+      setDialog(null);
+      await load();
+    } catch (e) {
+      setActionError(err(e));
+    } finally {
+      lock.current = false;
+      setBusy(false);
     }
   };
-
-  return (
-    <div className="cc-container">
-      {/* Header */}
-      <div className="cc-header">
-        <div className="cc-header-icon">🏢</div>
-        <div>
-          <h1>Company Intelligence</h1>
-          <p>AI-powered placement drive management — {drive ? `${drive.companyName} Drive · ${drive.driveDate}` : 'Ready to search alumni for any company...'}</p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <Link to="/admin/dashboard" className="cc-refresh-btn" style={{ textDecoration: 'none', background: '#374151' }}>
-            ← Admin Dashboard
-          </Link>
-          <button className="cc-refresh-btn" onClick={handleTestEmail} style={{ background: '#1e3a5f' }} title="Send a test email to admin inbox to verify email works">
-            📧 Test Email
-          </button>
-          <button className="cc-refresh-btn" onClick={handleResetDemo} style={{ background: '#7f1d1d' }} title="Reset flow for fresh demo">
-            ↺ Reset Demo
-          </button>
-          <button className="cc-refresh-btn" onClick={refreshDrive} title="Refresh drive status">
-            🔄 Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Progress Steps */}
-      <div className="cc-steps">
-        {steps.map((s, i) => (
-          <div key={i} className={`cc-step ${i <= step ? 'cc-step-done' : ''} ${i === step ? 'cc-step-active' : ''}`}>
-            <div className="cc-step-icon">{s.icon}</div>
-            <span>{s.label}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="cc-body">
-        {/* Left: AI Bot Panel */}
-        <div className="cc-left">
-          <div className="cc-bot-header">
-            <span className="cc-bot-avatar">🤖</span>
-            <div>
-              <strong>AlumniConnect AI Bot</strong>
-              <span className="cc-bot-status">● Online</span>
-            </div>
-          </div>
-
-          {/* Drive Info Card */}
-          {drive && (
-            <div className="cc-drive-card">
-              <div className="cc-drive-badge">ACTIVE DRIVE</div>
-              <h3>{drive.companyName}</h3>
-              <div className="cc-drive-details">
-                <span>📅 {drive.driveDate}</span>
-                <span>📊 Min CGPA: {drive.minCgpa}</span>
-                <span>🎓 {drive.eligibleBranches?.join(', ')}</span>
-              </div>
-              <div className="cc-drive-stats">
-                <div className="cc-stat">
-                  <strong>{drive.invitedAlumni?.length || 0}</strong>
-                  <span>Alumni Invited</span>
-                </div>
-                <div className="cc-stat">
-                  <strong>{drive.acceptedAlumni?.length || 0}</strong>
-                  <span>Accepted</span>
-                </div>
-                <div className="cc-stat">
-                  <strong>{drive.registeredStudents?.length || 0}</strong>
-                  <span>Students</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* AI Prompt Box */}
-          {step < 2 && (
-            <div className="cc-prompt-box">
-              <label>💬 Give AI a command:</label>
-              <div className="cc-prompt-suggestions">
-                {['Find alumni who work at Microsoft', 'Search Tata Consultancy Services alumni', 'Find alumni at Infosys'].map((s) => (
-                  <button key={s} className="cc-suggestion" onClick={() => setPrompt(s)}>{s}</button>
-                ))}
-              </div>
-              <div className="cc-prompt-input-row">
-                <input
-                  className="cc-prompt-input"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                   placeholder="e.g. Find alumni who work in Microsoft..."
-                  onKeyDown={(e) => e.key === 'Enter' && handleAISearch()}
-                />
-                <button className="cc-send-btn" onClick={handleAISearch} disabled={loading || !prompt.trim()}>
-                  {loading ? '⏳' : '▶'}
-                </button>
-              </div>
-              {botTyping && <div className="cc-typing">AI is thinking<span className="cc-dots">...</span></div>}
-            </div>
-          )}
-
-          {/* Found Alumni List */}
-          {step >= 2 && foundAlumni.length > 0 && (
-            <div className="cc-alumni-list">
-              <div className="cc-section-title">
-                <span>👥 Matched Alumni ({foundAlumni.length})</span>
-                {step === 2 && (
-                  <button className="cc-select-all" onClick={() =>
-                    setSelectedAlumni(selectedAlumni.length === foundAlumni.length ? [] : foundAlumni.map(a => a.id))
-                  }>
-                    {selectedAlumni.length === foundAlumni.length ? 'Deselect All' : 'Select All'}
-                  </button>
-                )}
-              </div>
-              {foundAlumni.map((a) => (
-                <div key={a.id} className={`cc-alumni-card ${selectedAlumni.includes(a.id) ? 'cc-alumni-selected' : ''}`}
-                  onClick={() => step === 2 && setSelectedAlumni(prev =>
-                    prev.includes(a.id) ? prev.filter(x => x !== a.id) : [...prev, a.id]
-                  )}>
-                  <div className="cc-alumni-avatar">{a.name?.charAt(0)}</div>
-                  <div className="cc-alumni-info">
-                    <strong>{a.name}</strong>
-                    <span>{a.role} · {a.company}</span>
-                    <span className="cc-alumni-branch">{a.branch} · {a.passoutYear}</span>
-                  </div>
-                  {step === 2 && (
-                    <div className={`cc-alumni-check ${selectedAlumni.includes(a.id) ? 'cc-check-on' : ''}`}>
-                      {selectedAlumni.includes(a.id) ? '✓' : '○'}
-                    </div>
-                  )}
-                  {step >= 3 && (
-                    <div className={`cc-invite-status ${
-                      drive?.acceptedAlumni?.find(x => x.alumniId === a.id) ? 'cc-status-accepted' : 'cc-status-invited'
-                    }`}>
-                      {drive?.acceptedAlumni?.find(x => x.alumniId === a.id) ? '✅ Accepted' : '📨 Invited'}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* Action Buttons */}
-              {step === 2 && (
-                <button className="cc-action-btn" onClick={handleSendInvites} disabled={loading || selectedAlumni.length === 0}>
-                  {loading ? '⏳ Sending Email + SMS...' : `📧 📤 1-Click Email + SMS to ${selectedAlumni.length} Alumni`}
-                </button>
-              )}
-              {step === 3 && (
-                <div className="cc-waiting">
-                  <span>⏳ Waiting for alumni to accept...</span>
-                  <button className="cc-refresh-small" onClick={refreshDrive}>Check Status 🔄</button>
-                </div>
-              )}
-              {step === 4 && (
-                <button className="cc-action-btn cc-action-green" onClick={handleBroadcastStudents} disabled={loading}>
-                  {loading ? '⏳ Broadcasting...' : '📢 Notify All Students via SMS + Email'}
-                </button>
-              )}
-              {step >= 5 && (
-                <div className="cc-success-banner">
-                  🎉 Complete! Students notified. Community created. Webinar link sent!
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Activity Log */}
-        <div className="cc-right">
-          <div className="cc-log-header">📋 Activity Log</div>
-          {log.length === 0 && (
-            <div className="cc-log-empty">Type a prompt to start the AI-powered flow...</div>
-          )}
-          <div className="cc-log-list">
-            {log.map((entry, i) => (
-              <div key={i} className={`cc-log-entry cc-log-${entry.type}`}>
-                <span className="cc-log-time">{entry.time}</span>
-                <span>{entry.msg}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Registered Students Panel (Step 5+) */}
-          {drive?.registeredStudents?.length > 0 && (
-            <div className="cc-students-panel">
-              <div className="cc-section-title">🎓 Registered Students</div>
-              {drive.registeredStudents.map((s) => (
-                <div key={s.studentId} className={`cc-student-row ${s.isEligible ? 'cc-eligible' : 'cc-ineligible'}`}>
-                  <span>{s.name}</span>
-                  <span>CGPA: {s.cgpa}</span>
-                  <span className={`cc-badge ${s.isEligible ? 'cc-badge-green' : 'cc-badge-red'}`}>
-                    {s.isEligible ? '✅ Eligible' : '❌ Not Eligible'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  const closeDialog = () => {
+    if (lock.current) return;
+    setDialog(null);
+    setActionError('');
+  };
+  const invitations = drive?.invitedAlumni || [],
+    students = drive?.registeredStudents || [],
+    accepted = drive?.acceptedAlumni || [];
+  const open = drive && drive.status !== 'CLOSED' && drive.driveDate >= new Date().toISOString().slice(0, 10);
+  return <main className="admin-page cc-v2"><div className="admin-page-heading"><div><h1>Company Connect</h1><p>Find experienced alumni, invite mentors and prepare students for placement drives.</p></div><div className="cc-button-row"><button className="admin-secondary" onClick={load} disabled={loading} aria-label="Refresh placement drives"><RefreshCw size={16} /></button><button className="admin-action" onClick={() => {
+          setForm({
+            ...initial,
+            companyName: new URLSearchParams(location.search).get('company') || ''
+          });
+          setDialog('create');
+          setActionError('');
+        }}><Plus size={16} />Create Drive</button></div></div><AdminError error={error} retry={load} />{emailConfigured === false && <p className="cc-notice" role="status">Email sending is not configured. Configure your email provider before sending invitations. Failed emails can be retried from invitation records.</p>}{notice && <div className="cc-notice" role="status"><span>{notice}</span><button aria-label="Dismiss status" onClick={() => setNotice('')}>×</button></div>}
+    <CompanyConnectWorkflow drive={drive} searched={searched} matches={matches} searching={searching} onSearch={runSearch}/>{loading && !drives.length ? <AdminLoading /> : !drives.length ? <section className="admin-panel cc-flex-panel"><AdminEmpty><Building2 size={36} /><strong>No placement drives yet</strong><p>Create a drive with a real date and criteria. Alumni search uses current and previous company records, not an AI model.</p><button className="admin-action" onClick={() => setDialog('create')}>Create your first drive</button></AdminEmpty></section> : <><div className="admin-toolbar"><select aria-label="Select placement drive" value={driveId} onChange={e => {
+          setDriveId(e.target.value);
+          setTab('overview');
+        }}>{drives.map(d => <option key={d.id} value={d.id}>{d.companyName} · {d.driveDate} · {d.status.replaceAll('_', ' ')}</option>)}</select><span className="admin-status">{drive?.status.replaceAll('_', ' ')}</span><div className="cc-tabs">{['overview', 'alumni', 'students'].map(t => <button key={t} aria-pressed={tab === t} onClick={() => {
+            setTab(t);
+            setPage(1);
+            setActionError('');
+          }}>{t === 'overview' ? 'Drive Details' : t === 'alumni' ? `Alumni (${invitations.length})` : `Students (${students.length})`}</button>)}</div></div><AdminError error={!dialog ? actionError : ''} />
+      <section className="admin-panel cc-flex-panel">{tab === 'overview' ? <div className="cc-overview"><div><h2>{drive?.companyName} placement preparation</h2><dl className="admin-detail-grid">{[['Drive date', drive?.driveDate], ['CGPA cutoff', drive?.minCgpa], ['Eligible branches', drive?.eligibleBranches?.join(', ') || 'All branches'], ['Study years', drive?.eligibleYears?.join(', ') || 'All years'], ['Meeting link', drive?.webinarLink || 'Not added'], ['Storage', 'PostgreSQL']].map(([label, val]) => <div key={label}><dt>{label}</dt><dd>{val}</dd></div>)}</dl><div className="cc-button-row"><button className="admin-action" disabled={!open} onClick={() => {
+                setTab('alumni');
+                setPage(1);
+              }}>Find alumni</button><button className="admin-secondary" disabled={!open || !accepted.length || !!drive?.broadcastAt || drive?.eligibleStudentCount===0} onClick={() => setDialog('broadcast')}>Announce to Students</button><button className="admin-secondary" disabled={drive?.status === 'CLOSED'} onClick={() => setDialog('close')}>Close Drive</button>{drive?.communityId && <Link className="admin-secondary" to={`/communities/placement-${drive.id}`}>Open Community</Link>}</div><p className="cc-caption" role="status">{!open ? 'This drive is closed or past its date.' : drive?.broadcastAt ? 'Students have already been notified.' : !accepted.length ? 'Student announcement unlocks after at least one invited alumnus accepts.' : drive?.eligibleStudentCount===0?'No saved student profiles meet the criteria. Complete student profiles or review the drive requirements.':`${drive?.eligibleStudentCount??0} eligible student profiles. You can announce this drive now.`}</p></div><aside><h3>How this works</h3><ol><li>Create a drive and set the criteria.</li><li>Search current and previous company experience.</li><li>Review recipients and send invitations.</li><li>Alumni accept directly from their email. A private community is created and an availability email follows.</li><li>Announce to students after a mentor accepts.</li><li>Saved student profiles determine eligibility. Eligible students enter a private community.</li></ol><p>{accepted.length} mentors accepted · {students.filter(s => s.isEligible).length} eligible registrations.</p></aside></div> : tab === 'alumni' ? <><form className="admin-toolbar" onSubmit={e => {
+            e.preventDefault();
+            runSearch();
+          }}><input aria-label="Company name to search alumni" placeholder="Company name" value={search} onChange={e => setSearch(e.target.value)} /><button className="admin-secondary" disabled={searching || !search.trim()}><Search size={15} />{searching ? 'Searching…' : 'Search alumni'}</button><button type="button" className="admin-action" disabled={!open || !selected.length || busy} onClick={() => setDialog('invite')}><Send size={14} />Invite Selected ({selected.length})</button></form><p className="cc-caption">Company keyword matching · Invitations are sent only after you review recipients.</p><div className="admin-table-scroll">{searched ? <>{!matches.length ? <AdminEmpty><strong>No alumni profiles match “{search}”.</strong><p>{searchContext?.totalAlumni ?? 0} alumni accounts exist. Recorded current companies: {searchContext?.recordedCompanies?.join(', ') || 'None provided'}.</p><p>Add the hiring company to the alumnus’s current or previous experience, or search a company actually recorded in their profile.</p><Link to="/admin/alumni">Review alumni profiles</Link></AdminEmpty> : <table className="admin-table"><thead><tr><th>Select</th><th>Alumni</th><th>Match</th><th>Invitation</th></tr></thead><tbody>{matches.slice((page - 1) * 6, page * 6).map(a => {
+                    const inv = invitations.find(i => i.alumniId === a.id);
+                    return <tr key={a.id}><td><input type="checkbox" aria-label={`Select ${a.name}`} disabled={!!inv || !open} checked={selected.includes(a.id)} onChange={e => setSelected(prev => e.target.checked ? [...prev, a.id] : prev.filter(id => id !== a.id))} /></td><td><strong>{a.name}</strong><small>{[a.role, a.company].filter(Boolean).join(' · ') || 'Professional details not recorded'}</small></td><td>{a.matchReason}</td><td>{inv?.status || 'Not invited'}</td></tr>;
+                  })}</tbody></table>}</> : !invitations.length ? <AdminEmpty>Search a company to select alumni for this drive.</AdminEmpty> : <table className="admin-table"><thead><tr><th>Invited alumni</th><th>Response</th><th>Email</th><th>Acceptance follow-up</th></tr></thead><tbody>{invitations.slice((page - 1) * 6, page * 6).map(i => <tr key={i.id}><td><strong>{i.name}</strong><small>{i.email}</small></td><td><span className="admin-status">{i.status}</span></td><td>{i.delivery?.email || 'Pending'}{i.status === 'INVITED' && i.delivery?.email !== 'sent' && open && <button className="admin-secondary" onClick={() => {
+                      setSelected([i.alumniId]);
+                      setDialog('retry');
+                    }}>Retry email</button>}</td><td>{i.delivery?.availabilityEmail ? `Availability: ${i.delivery.availabilityEmail} · Admin: ${i.delivery.adminEmail}` : 'After acceptance'}</td></tr>)}</tbody></table>}</div><div className="cc-button-row"><button className="admin-secondary" onClick={() => {
+              setSearched(false);
+              setPage(1);
+            }}>View invitation records</button></div><LocalPager items={searched ? matches : invitations} page={page} onPage={setPage} /></> : <><h2>Student registrations</h2><p className="cc-caption">Eligibility uses saved CGPA, branch and study year. Registration is stored once per student and drive.</p><div className="admin-table-scroll">{!students.length ? <AdminEmpty>{drive?.broadcastAt ? 'No students have registered yet.' : 'Students can register after the announcement.'}</AdminEmpty> : <table className="admin-table"><thead><tr><th>Student</th><th>Branch / Year</th><th>CGPA</th><th>Outcome</th></tr></thead><tbody>{students.slice((page - 1) * 6, page * 6).map(s => <tr key={s.id}><td><strong>{s.name}</strong><small>{s.rollNumber}</small></td><td>{s.branch || 'Missing'} · {s.currentYear ?? 'Missing'}</td><td>{s.cgpa ?? 'Missing'}</td><td><span className="admin-status">{s.status}</span><small>{s.eligibilityReasons.join('; ')}</small></td></tr>)}</tbody></table>}</div><LocalPager items={students} page={page} onPage={setPage} /></>}</section></>}
+    {dialog && <AdminDialog title={dialog === 'create' ? 'Create Placement Drive' : dialog === 'invite' || dialog === 'retry' ? 'Review Alumni Invitations' : dialog === 'broadcast' ? 'Review Student Announcement' : 'Close Placement Drive'} onClose={closeDialog}><AdminError error={actionError} />{dialog === 'create' ? <form className="cc-create-form" onSubmit={e => {
+        e.preventDefault();
+        perform('create');
+      }}>{[['companyName', 'Company name', 'text'], ['driveDate', 'Drive date', 'date'], ['minCgpa', 'Minimum CGPA (0–10)', 'number'], ['eligibleBranches', 'Eligible branches (comma-separated; blank = all)', 'text'], ['eligibleYears', 'Eligible study years (comma-separated; blank = all)', 'text'], ['webinarLink', 'Meeting link (optional HTTP/S URL)', 'url']].map(([key, label, type]) => <label key={key}>{label}<input type={type} required={['companyName', 'driveDate', 'minCgpa'].includes(key)} min={key === 'minCgpa' ? 0 : key === 'driveDate' ? new Date().toISOString().slice(0, 10) : undefined} max={key === 'minCgpa' ? 10 : undefined} step={key === 'minCgpa' ? '.01' : undefined} value={form[key]} onChange={e => setForm(f => ({
+            ...f,
+            [key]: e.target.value
+          }))} /></label>)}<button className="admin-action" disabled={busy}>{busy ? 'Saving…' : 'Save Drive'}</button></form> : <div className="cc-confirm"><p>{dialog === 'invite' || dialog === 'retry' ? `Send in-app invitations, and attempt configured email delivery, to ${selected.length} selected alumni for ${drive?.companyName}. Already invited alumni will be skipped.` : dialog === 'broadcast' ? `Announce ${drive?.companyName} to students whose saved profiles meet this drive’s criteria. In-app notifications are saved; configured email delivery is reported separately.` : 'Close this drive to new responses and registrations. Existing data is retained.'}</p>{dialog === 'invite' && <ul>{matches.filter(a => selected.includes(a.id)).map(a => <li key={a.id}>{a.name} · {a.email}</li>)}</ul>}<button className="admin-action" disabled={busy} onClick={() => perform(dialog)}>{busy ? 'Working…' : 'Confirm'}</button><button className="admin-secondary" disabled={busy} onClick={closeDialog}>Cancel</button></div>}</AdminDialog>}
+  </main>;
 }

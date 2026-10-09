@@ -78,7 +78,7 @@ export default function StudentDashboard() {
         setAiRecs(recRes.data);
       }
       if (driveRes?.data?.drives?.length > 0) {
-        setActiveDrive(driveRes.data.drives[0]);
+        setActiveDrive(driveRes.data.drives.find(d=>d.status==='STUDENTS_NOTIFIED'&&d.driveDate>=new Date().toISOString().slice(0,10))||null);
       }
     } catch (err) {
       console.error('Failed to load student dashboard data:', err);
@@ -190,12 +190,12 @@ export default function StudentDashboard() {
                     {activeDrive.companyName} Placement Drive Announced!
                   </h3>
                   <p style={{ margin: '4px 0 0', fontSize: 13, color: '#e0e7ff' }}>
-                    Alumni mentors ({activeDrive.acceptedAlumni?.map(a => a.name).join(', ') || 'Senior Alumni'}) are ready to guide you. Check eligibility and register now!
+                    Alumni mentors ({activeDrive.acceptedAlumni?.map(a => a.name).join(', ') || 'No accepted mentors listed'}) are ready to guide you. Check eligibility and register now!
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => navigate('/student/placement')}
+                onClick={() => navigate(`/student/placement?driveId=${encodeURIComponent(activeDrive.id)}`)}
                 style={{
                   background: 'linear-gradient(90deg, #10b981, #059669)',
                   color: '#fff',

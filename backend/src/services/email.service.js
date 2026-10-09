@@ -9,6 +9,7 @@ function getTransporter() {
   if (user && pass) {
     return nodemailer.createTransport({
       service: 'gmail',
+      connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
       auth: {
         user: user.trim(),
         pass: pass.trim().replace(/\s+/g, ''), // Google app passwords often have spaces
@@ -20,6 +21,7 @@ function getTransporter() {
   if (process.env.SMTP_HOST && process.env.SMTP_PORT) {
     return nodemailer.createTransport({
       host: process.env.SMTP_HOST,
+      connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
       port: parseInt(process.env.SMTP_PORT, 10),
       secure: process.env.SMTP_SECURE === 'true',
       auth: {
@@ -36,7 +38,7 @@ function getTransporter() {
  * Send an email with HTML template
  * @param {Object} options - { to, subject, html, text }
  */
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, replyTo }) {
   try {
     const transport = getTransporter();
     const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'alumniconnect.system@gmail.com';
@@ -50,6 +52,7 @@ async function sendEmail({ to, subject, html, text }) {
       from: `"AlumniConnect Placement Cell" <${fromAddress}>`,
       to,
       subject,
+      ...(replyTo ? { replyTo } : {}),
       text: text || html.replace(/<[^>]+>/g, ''),
       html,
     });

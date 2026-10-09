@@ -7,6 +7,7 @@ import { connectionService } from "../services/connectionService";
 import { alumniProfileService } from "../services/alumniProfileService";
 import { AlumniProfileEditor } from "../pages/dashboards/AlumniOverview";
 import AlumniShell from "./AlumniShell";
+import AdminShell from './AdminShell';
 import StudentShell from "./StudentShell";
 
 // Shared service pages retain their own content/actions; Alumni get the same navigation shell.
@@ -80,6 +81,7 @@ export default function AlumniRouteLayout() {
         </div>
       </StudentShell>
     );
+  if (user?.role === "ADMIN") return <AdminShell><Outlet /></AdminShell>;
   if (user?.role !== "ALUMNI") return <Outlet />;
   const active = location.pathname.startsWith("/messages")
     ? "messages"

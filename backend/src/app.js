@@ -23,9 +23,10 @@ app.use(
 
 // Logging middleware
 if (config.nodeEnv === 'development') {
-  app.use(morgan('dev'));
+  morgan.token('safe-url', req => req.originalUrl.includes('/company-connect/email-respond') ? req.originalUrl.split('?')[0] : req.originalUrl);
+  app.use(morgan(':method :safe-url :status :response-time ms'));
 } else {
-  app.use(morgan('combined'));
+  app.use(morgan('combined', {skip: req=>req.originalUrl.includes('/company-connect/email-respond')}));
 }
 
 // Body parsing middleware

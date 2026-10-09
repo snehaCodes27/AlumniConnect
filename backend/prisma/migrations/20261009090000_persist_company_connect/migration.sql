@@ -1,0 +1,14 @@
+CREATE TABLE "placement_drives" ("id" TEXT NOT NULL, "companyName" TEXT NOT NULL, "driveDate" TIMESTAMP(3) NOT NULL, "minCgpa" DECIMAL(3,2) NOT NULL, "eligibleBranches" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], "eligibleYears" INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[], "webinarLink" TEXT, "status" TEXT NOT NULL DEFAULT 'ANNOUNCED', "creatorId" TEXT NOT NULL, "communityId" TEXT, "broadcastAt" TIMESTAMP(3), "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "placement_drives_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "placement_invitations" ("id" TEXT NOT NULL, "driveId" TEXT NOT NULL, "alumniId" TEXT NOT NULL, "status" TEXT NOT NULL DEFAULT 'INVITED', "sentAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "respondedAt" TIMESTAMP(3), "delivery" JSONB, CONSTRAINT "placement_invitations_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "placement_registrations" ("id" TEXT NOT NULL, "driveId" TEXT NOT NULL, "studentId" TEXT NOT NULL, "rollNumber" TEXT NOT NULL, "branch" TEXT, "cgpa" DECIMAL(3,2), "currentYear" INTEGER, "isEligible" BOOLEAN NOT NULL, "eligibilityReasons" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], "status" TEXT NOT NULL, "registeredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "placement_registrations_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "placement_broadcasts" ("id" TEXT NOT NULL, "driveId" TEXT NOT NULL, "studentId" TEXT NOT NULL, "delivery" JSONB, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "placement_broadcasts_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "placement_drives_communityId_key" ON "placement_drives"("communityId");
+CREATE INDEX "placement_drives_status_driveDate_idx" ON "placement_drives"("status", "driveDate");
+CREATE UNIQUE INDEX "placement_invitations_driveId_alumniId_key" ON "placement_invitations"("driveId", "alumniId");
+CREATE INDEX "placement_invitations_alumniId_idx" ON "placement_invitations"("alumniId");
+CREATE UNIQUE INDEX "placement_registrations_driveId_studentId_key" ON "placement_registrations"("driveId", "studentId");
+CREATE INDEX "placement_registrations_studentId_idx" ON "placement_registrations"("studentId");
+CREATE UNIQUE INDEX "placement_broadcasts_driveId_studentId_key" ON "placement_broadcasts"("driveId", "studentId");
+ALTER TABLE "placement_invitations" ADD CONSTRAINT "placement_invitations_driveId_fkey" FOREIGN KEY ("driveId") REFERENCES "placement_drives"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "placement_registrations" ADD CONSTRAINT "placement_registrations_driveId_fkey" FOREIGN KEY ("driveId") REFERENCES "placement_drives"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "placement_broadcasts" ADD CONSTRAINT "placement_broadcasts_driveId_fkey" FOREIGN KEY ("driveId") REFERENCES "placement_drives"("id") ON DELETE CASCADE ON UPDATE CASCADE;

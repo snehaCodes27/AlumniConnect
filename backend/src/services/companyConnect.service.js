@@ -1,490 +1,841 @@
-const { PrismaClient } = require('@prisma/client');
-const { sendSMS } = require('./twilio.service');
+const prisma = require('../config/prisma');
 const {
-  sendEmail,
-  getAlumniPlacementInviteHtml,
-  getStudentPlacementBroadcastHtml,
+  sendEmail
 } = require('./email.service');
-const { getIO } = require('../socket');
-
-const prisma = new PrismaClient();
-
-// In-memory state for active drives — starts empty, created dynamically
-let activeDrives = [];
-
-
-/**
- * 1. Get All Placement Announcements / Drives
- */
-const getDrives = async () => {
-  return activeDrives;
+const {
+  emitToUser
+} = require('../socket');
+const {
+  fail,
+  requiredText,
+  validateDrive,
+  eligibility,
+  viewDrive
+} = require('./companyConnectUtils');
+const {
+  signResponse,
+  verifyResponse
+} = require('./companyConnectEmailLinks');
+const include = {
+  invitations: true,
+  registrations: true
 };
-
-/**
- * 1b. Create New Drive (Admin)
- */
-const createDrive = async ({ companyName, driveDate, minCgpa, eligibleBranches, webinarLink }) => {
-  const id = `drive-${companyName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`;
-  const newDrive = {
-    id,
-    companyName,
-    driveDate,
-    minCgpa: parseFloat(minCgpa) || 6.0,
-    eligibleBranches: eligibleBranches || ['Computer Engineering', 'Information Technology'],
-    status: 'ANNOUNCED',
-    announcementMessage: `On ${driveDate}, ${companyName} placement drive is arranged in our college.`,
-    announcementTime: new Date().toISOString(),
-    invitedAlumni: [],
-    acceptedAlumni: [],
-    registeredStudents: [],
-    communityId: null,
-    webinarLink: webinarLink || `https://meet.google.com/${companyName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-placement`,
+const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+})[char]);
+const adminView = {
+  role: 'ADMIN'
+};
+async function requireDrive(id, db = prisma) {
+  if (typeof id !== 'string' || !id) fail('driveId is required.');
+  const d = await db.placementDrive.findUnique({
+    where: {
+      id
+    },
+    include
+  });
+  if (!d) fail('Drive not found.', 404);
+  return d;
+}
+async function requireOpen(id, db = prisma) {
+  const drive = await requireDrive(id, db);
+  if (drive.status === 'CLOSED' || drive.driveDate < new Date(new Date().toISOString().slice(0, 10))) fail('This drive is closed.', 409);
+  return drive;
+}
+async function lockOpen(id, tx) {
+  if (typeof id !== 'string' || !id) fail('driveId is required.');
+  const found = await tx.placementDrive.updateMany({
+    where: {
+      id,
+      status: {
+        not: 'CLOSED'
+      }
+    },
+    data: {
+      updatedAt: new Date()
+    }
+  });
+  if (!found.count) {
+    await requireDrive(id, tx);
+    fail('This drive is closed.', 409);
+  }
+  return requireOpen(id, tx);
+}
+async function enrich(drives, user) {
+  const ids = [...new Set(drives.flatMap(d => [...d.invitations.map(i => i.alumniId), ...d.registrations.map(r => r.studentId)]))];
+  const users = ids.length ? await prisma.user.findMany({
+    where: {
+      id: {
+        in: ids
+      }
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      alumniProfile: {
+        select: {
+          currentCompany: true
+        }
+      }
+    }
+  }) : [];
+  const map = new Map(users.map(u => [u.id, u]));
+  return drives.map(d => viewDrive(d, user, map));
+}
+async function getDrives(user) {
+  const where = user.role === 'ADMIN' ? {} : user.role === 'ALUMNI' ? {
+    invitations: {
+      some: {
+        alumniId: user.userId
+      }
+    }
+  } : {
+    status: {
+      in: ['STUDENTS_NOTIFIED', 'CLOSED']
+    },
+    broadcastAt: {
+      not: null
+    }
   };
-  activeDrives.push(newDrive);
-  return newDrive;
-};
-
-/**
- * 2. Get Single Drive
- */
-const getDriveById = async (id) => {
-  return activeDrives.find((d) => d.id === id) || null;
-};
-
-/**
- * 2b. Get or create drive by company name
- */
-const getOrCreateDrive = async ({ companyName, driveDate }) => {
-  const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  const existing = activeDrives.find((d) => d.companyName.toLowerCase().includes(slug) || slug.includes(d.companyName.toLowerCase().replace(/[^a-z0-9]/g, '-')));
-  if (existing) return existing;
-  return createDrive({ companyName, driveDate: driveDate || 'TBD' });
-};
-
-/**
- * 3. Search Alumni for a Company (AI Discovery)
- */
-const searchAlumniForCompany = async (companyName) => {
-  const query = companyName.trim().toLowerCase();
-
-  const alumniList = await prisma.user.findMany({
+  const result = await enrich(await prisma.placementDrive.findMany({
+    where,
+    include,
+    orderBy: {
+      createdAt: 'desc'
+    }
+  }), user);
+  if(user.role==='ADMIN'){const students=await prisma.user.findMany({where:{role:'STUDENT'},select:{studentProfile:true}});return result.map(d=>({...d,eligibleStudentCount:students.filter(s=>eligibility(d,s.studentProfile).isEligible).length}));}
+  return result;
+}
+async function getDriveById(id, user) {
+  const d = await requireDrive(id);
+  if (user.role === 'ALUMNI' && !d.invitations.some(i => i.alumniId === user.userId)) fail('You are not invited to this drive.', 403);
+  if (user.role === 'STUDENT' && !d.broadcastAt) fail('This drive has not been announced to students.', 403);
+  return (await enrich([d], user))[0];
+}
+async function createDrive(input, creatorId) {
+  const drive = await prisma.placementDrive.create({
+    data: {
+      ...validateDrive(input),
+      creatorId
+    },
+    include
+  });
+  return (await enrich([drive], adminView))[0];
+}
+async function closeDrive(id) {
+  const d = await requireDrive(id);
+  return (await enrich([await prisma.placementDrive.update({
+    where: {
+      id: d.id
+    },
+    data: {
+      status: 'CLOSED'
+    },
+    include
+  })], adminView))[0];
+}
+async function searchAlumniForCompany(companyName) {
+  const query = requiredText(companyName, 'Company name', 100);
+  return (await prisma.user.findMany({
     where: {
       role: 'ALUMNI',
       alumniProfile: {
-        OR: [
-          { currentCompany: { contains: query, mode: 'insensitive' } },
-          { previousCompanies: { some: { companyName: { contains: query, mode: 'insensitive' } } } },
-        ],
-      },
+        OR: [{
+          currentCompany: {
+            contains: query,
+            mode: 'insensitive'
+          }
+        }, {
+          previousCompanies: {
+            some: {
+              companyName: {
+                contains: query,
+                mode: 'insensitive'
+              }
+            }
+          }
+        }]
+      }
     },
-    include: { alumniProfile: true },
-  });
-
-  return alumniList.map((alumni) => ({
-    id: alumni.id,
-    name: `${alumni.firstName} ${alumni.lastName}`,
-    email: alumni.email,
-    phone: alumni.phone,
-    role: alumni.alumniProfile?.jobRole || 'Engineer',
-    company: alumni.alumniProfile?.currentCompany || companyName,
-    branch: alumni.alumniProfile?.branch || 'Engineering',
-    passoutYear: alumni.alumniProfile?.graduationYear || 2022,
-    skills: alumni.alumniProfile?.skills || [],
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      alumniProfile: {
+        select: {
+          jobRole: true,
+          currentCompany: true,
+          branch: true,
+          graduationYear: true,
+          previousCompanies: {
+            select: {
+              companyName: true
+            }
+          }
+        }
+      }
+    },
+    take: 200,
+    orderBy: {
+      firstName: 'asc'
+    }
+  })).map(u => ({
+    id: u.id,
+    name: `${u.firstName} ${u.lastName}`,
+    email: u.email,
+    role: u.alumniProfile?.jobRole || null,
+    company: u.alumniProfile?.currentCompany || null,
+    branch: u.alumniProfile?.branch || null,
+    passoutYear: u.alumniProfile?.graduationYear || null,
+    matchReason: u.alumniProfile?.currentCompany?.toLowerCase().includes(query.toLowerCase()) ? 'Current company' : 'Previous company'
   }));
-};
-
-/**
- * 3b. ONE-CLICK: Search alumni + auto-create drive + send emails (all in one)
- */
-const searchAndInviteAlumni = async ({ companyName, driveDate, minCgpa, alumniIds }) => {
-  // 1. Get or create drive for this company
-  const drive = await getOrCreateDrive({ companyName, driveDate });
-
-  // 2. If no alumniIds passed, find all alumni at this company
-  let targetIds = alumniIds;
-  if (!targetIds || targetIds.length === 0) {
-    const found = await searchAlumniForCompany(companyName);
-    targetIds = found.map((a) => a.id);
-  }
-
-  if (targetIds.length === 0) {
-    return { success: false, error: `No alumni found working at ${companyName}`, drive, invited: [] };
-  }
-
-  // 3. Send invites
-  const result = await sendAlumniInvites({ driveId: drive.id, alumniIds: targetIds });
-  return { ...result, drive, companyName };
-};
-
-/**
- * 4. Send Invites to Selected Alumni (SMS & In-App Notification)
- */
-const sendAlumniInvites = async ({ driveId, alumniIds }) => {
-  const drive = await getDriveById(driveId);
-  const invited = [];
-
-  for (const alumniId of alumniIds) {
-    const user = await prisma.user.findUnique({
-      where: { id: alumniId },
-      include: { alumniProfile: true },
-    });
-
-    if (user) {
-      const inviteRecord = {
-        id: `invite-${user.id}`,
-        alumniId: user.id,
-        name: `${user.firstName} ${user.lastName}`,
-        email: user.email,
-        phone: user.phone,
-        company: user.alumniProfile?.currentCompany || drive.companyName,
-        status: 'INVITED', // INVITED, ACCEPTED, DECLINED
-        sentAt: new Date().toISOString(),
-      };
-
-      // Add to drive record
-      const existingIdx = drive.invitedAlumni.findIndex((a) => a.alumniId === user.id);
-      if (existingIdx >= 0) {
-        drive.invitedAlumni[existingIdx] = inviteRecord;
-      } else {
-        drive.invitedAlumni.push(inviteRecord);
+}
+async function getSearchContext() {
+  const [totalAlumni, groups] = await Promise.all([prisma.user.count({
+    where: {
+      role: 'ALUMNI'
+    }
+  }), prisma.alumniProfile.groupBy({
+    by: ['currentCompany'],
+    where: {
+      currentCompany: {
+        not: null
       }
-      invited.push(inviteRecord);
-
-      // Create in-app Notification for Alumni
-      await prisma.notification.create({
-        data: {
-          userId: user.id,
-          type: 'SYSTEM',
-          title: `Invitation to Guide Juniors - ${drive.companyName} Drive`,
-          message: `On ${drive.driveDate}, ${drive.companyName} placement drive is arranged in our college. Would you be interested in guiding your juniors?`,
-          data: { driveId: drive.id },
-        },
-      });
-
-      const backendUrl = process.env.API_BASE_URL || 'http://localhost:5000';
-      const acceptUrl = `${backendUrl}/api/company-connect/email-respond?driveId=${drive.id}&alumniId=${user.id}&action=ACCEPT`;
-      const declineUrl = `${backendUrl}/api/company-connect/email-respond?driveId=${drive.id}&alumniId=${user.id}&action=DECLINE`;
-
-      // Send Real SMS to Alumni via TextBee
-      if (user.phone) {
-        const smsText = `AlumniConnect: Hi ${user.firstName}, on ${drive.driveDate}, ${drive.companyName} placement drive is arranged. Can you guide juniors? Tap to Accept: ${acceptUrl}`;
-        sendSMS({ to: user.phone, body: smsText }).catch((e) =>
-          console.warn(`[Company Connect SMS Warning] ${e.message}`)
-        );
-      }
-
-      // Send Real Email to Alumni
-      if (user.email) {
-        sendEmail({
-          to: user.email,
-          subject: `Placement Drive Guidance Invitation: ${drive.companyName} (${drive.driveDate})`,
-          html: getAlumniPlacementInviteHtml({
-            alumniName: `${user.firstName} ${user.lastName}`,
-            companyName: drive.companyName,
-            driveDate: drive.driveDate,
-            webinarLink: drive.webinarLink,
-            acceptUrl,
-            declineUrl,
-             dashboardLink: `${process.env.CLIENT_URL || 'http://localhost:5173'}/alumni/dashboard`,
-          }),
-        }).catch((e) => console.warn(`[Company Connect Email Warning] ${e.message}`));
-      }
+    },
+    _count: {
+      _all: true
     }
-  }
-
-  drive.status = 'ALUMNI_INVITED';
-
-  // Broadcast socket update
-  const io = getIO();
-  if (io) {
-    io.emit('company_connect:invites_sent', { driveId: drive.id, invitedCount: invited.length });
-  }
-
-  return { success: true, invited };
-};
-
-/**
- * 5. Alumni Responds (Accept / Reject)
- */
-const respondAlumniInvite = async ({ driveId, alumniId, action }) => {
-  const drive = await getDriveById(driveId);
-  const invite = drive.invitedAlumni.find((a) => a.alumniId === alumniId);
-
-  const status = action === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED';
-  if (invite) {
-    invite.status = status;
-  }
-
-  if (action === 'ACCEPT') {
-    const existingIdx = drive.acceptedAlumni.findIndex((a) => a.alumniId === alumniId);
-    if (existingIdx < 0 && invite) {
-      drive.acceptedAlumni.push(invite);
-    }
-
-    // Notify Admin via Notification in database
-    const adminUser = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-    if (adminUser) {
-      await prisma.notification.create({
-        data: {
-          userId: adminUser.id,
-          type: 'SYSTEM',
-          title: `Alumni Accepted Placement Mentorship 🌟`,
-          message: `${invite?.name || 'Alumni'} has accepted your request to guide juniors for ${drive.companyName} placement drive!`,
-          data: { driveId: drive.id, alumniId },
-        },
-      });
-    }
-
-    // Socket broadcast
-    const io = getIO();
-    if (io) {
-      io.emit('company_connect:alumni_accepted', {
-        driveId: drive.id,
-        alumniName: invite?.name,
-      });
-    }
-  }
-
-  return { success: true, status, drive };
-};
-
-/**
- * 6. Admin Broadcasts to Students (SMS & In-App Notification)
- */
-const broadcastToStudents = async ({ driveId }) => {
-  const drive = await getDriveById(driveId);
-  drive.status = 'STUDENTS_NOTIFIED';
-
-  const students = await prisma.user.findMany({
-    where: { role: 'STUDENT' },
-    include: { studentProfile: true },
-  });
-
-  const mentorNames = drive.acceptedAlumni.map((a) => a.name).join(', ') || 'Senior Alumni';
-
-  for (const student of students) {
-    // In-app Notification
-    await prisma.notification.create({
-      data: {
-        userId: student.id,
-        type: 'SYSTEM',
-        title: `${drive.companyName} Placement Drive Announcement 🚀`,
-        message: `In our college, on ${drive.driveDate}, ${drive.companyName} placement drive is arranged. Alumni (${mentorNames}) are ready to guide you. Fill form if interested!`,
-        data: { driveId: drive.id, action: 'FILL_FORM' },
-      },
-    });
-
-    // Send Real SMS to Student
-    if (student.phone) {
-      const smsBody = `AlumniConnect: ${drive.companyName} Drive on ${drive.driveDate}! Alumni mentors are ready to guide you. Check your student dashboard to register!`;
-      sendSMS({ to: student.phone, body: smsBody }).catch((e) =>
-        console.warn(`[Student Broadcast SMS Warning] ${e.message}`)
-      );
-    }
-
-    // Send Real Email to Student
-    if (student.email) {
-      sendEmail({
-        to: student.email,
-        subject: `Upcoming Placement Drive Announcement: ${drive.companyName} (${drive.driveDate})`,
-        html: getStudentPlacementBroadcastHtml({
-          studentName: `${student.firstName} ${student.lastName}`,
-          companyName: drive.companyName,
-          driveDate: drive.driveDate,
-          mentorNames,
-          webinarLink: drive.webinarLink,
-          registrationLink: 'http://localhost:5173/student/placement',
-        }),
-      }).catch((e) => console.warn(`[Student Broadcast Email Warning] ${e.message}`));
-    }
-  }
-
-  const io = getIO();
-  if (io) {
-    io.emit('company_connect:students_notified', { driveId: drive.id, studentCount: students.length });
-  }
-
-  return { success: true, notifiedCount: students.length, drive };
-};
-
-/**
- * 7. Student Registration & Automated Eligibility Check & Community Creation
- */
-const registerStudentForDrive = async ({ driveId, studentUserId, formDetails }) => {
-  const drive = await getDriveById(driveId);
-  const student = await prisma.user.findUnique({
-    where: { id: studentUserId },
-    include: { studentProfile: true },
-  });
-
-  if (!student) {
-    const error = new Error('Student not found.');
-    error.statusCode = 404;
-    throw error;
-  }
-
-  const cgpa = formDetails.cgpa ? parseFloat(formDetails.cgpa) : (student.studentProfile?.cgpa ? parseFloat(student.studentProfile.cgpa) : 0);
-  const branch = formDetails.branch || student.studentProfile?.branch || 'Information Technology';
-
-  // Eligibility Checks
-  const isCgpaEligible = cgpa >= drive.minCgpa;
-  const isBranchEligible = drive.eligibleBranches.some((b) => branch.toLowerCase().includes(b.toLowerCase()) || b.toLowerCase().includes(branch.toLowerCase()));
-  const isEligible = isCgpaEligible && isBranchEligible;
-
-  const registrationRecord = {
-    studentId: student.id,
-    name: `${student.firstName} ${student.lastName}`,
-    email: student.email,
-    phone: student.phone,
-    rollNumber: formDetails.rollNumber || '22IT101',
-    branch,
-    cgpa,
-    isEligible,
-    eligibilityReasons: [
-      isCgpaEligible ? `CGPA criteria satisfied (${cgpa} >= ${drive.minCgpa})` : `CGPA below cutoff (${cgpa} < ${drive.minCgpa})`,
-      isBranchEligible ? `Branch criteria satisfied (${branch})` : `Branch not eligible`,
-      'Year criteria satisfied (Final/Pre-final year)',
-    ],
-    status: isEligible ? 'ENROLLED' : 'REJECTED_CRITERIA',
-    registeredAt: new Date().toISOString(),
+  })]);
+  return {
+    totalAlumni,
+    recordedCompanies: groups.map(g => g.currentCompany).filter(Boolean).slice(0, 20)
   };
-
-  // Add to drive registrations
-  const existIdx = drive.registeredStudents.findIndex((s) => s.studentId === student.id);
-  if (existIdx >= 0) {
-    drive.registeredStudents[existIdx] = registrationRecord;
+}
+async function notifyAdmins(event, payload) {
+  const admins = await prisma.user.findMany({
+    where: {
+      role: 'ADMIN'
+    },
+    select: {
+      id: true
+    }
+  });
+  for (const a of admins) emitToUser(a.id, event, payload);
+}
+function emailStatus(result) {
+  return result.success ? 'sent' : result.simulated ? 'not_configured' : 'failed';
+}
+async function deliver(user, drive, kind, invitation) {
+  const client = process.env.CLIENT_URL || 'http://localhost:5173';
+  const date = drive.driveDate.toISOString().slice(0, 10);
+  const subject = kind === 'invite' ? `Guidance invitation: ${drive.companyName}` : `Placement announcement: ${drive.companyName}`;
+  let text, html;
+  if (kind === 'invite') {
+    const base = process.env.API_PUBLIC_URL || `http://localhost:${process.env.PORT || 5000}/api`;
+    const link = action => `${base.replace(/\/$/, '')}/company-connect/email-respond?token=${encodeURIComponent(signResponse(invitation, action))}`;
+    const accept = link('ACCEPT'),
+      decline = link('DECLINE');
+    text = `${drive.companyName} placement drive on ${date}. Help students prepare with your company experience. Accept: ${accept} Decline: ${decline}. Links expire after 7 days. After acceptance, we will email you to ask for your availability.`;
+    html = `<p>Hello ${escape(user.firstName)},</p><p>Would you guide students for the <strong>${escape(drive.companyName)}</strong> placement drive on ${date}?</p><p><a href="${escape(accept)}">Accept invitation</a> &nbsp; <a href="${escape(decline)}">Decline invitation</a></p><p>No sign-in is needed. These personal links expire in 7 days. After acceptance, we will email you to ask for your availability.</p>`;
   } else {
-    drive.registeredStudents.push(registrationRecord);
+    const link = `${client}/student/placement?driveId=${encodeURIComponent(drive.id)}`;
+    text = `${drive.companyName} placement drive on ${date}. Check saved-profile eligibility and register: ${link}`;
+    html = `<p>Hello ${escape(user.firstName)},</p><p>${escape(text)}</p><p><a href="${escape(link)}">Review placement drive</a></p>`;
   }
-
-  // If eligible, automatically create or add to Dedicated Community!
-  if (isEligible) {
-    // 1. Check or Create Community: "Godrej Infotech Placement Community"
-    let community = null;
-    if (drive.communityId) {
-      community = await prisma.community.findUnique({ where: { id: drive.communityId } });
-    }
-
-    if (!community) {
-      const adminUser = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
-      const communityName = `${drive.companyName} Placement Community`;
-      const slug = `placement-${drive.companyName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-
-      community = await prisma.community.upsert({
-        where: { slug },
-        update: {},
-        create: {
-          name: communityName,
-          slug,
-          description: `Official preparation and guidance community for ${drive.companyName} placement drive on ${drive.driveDate}.`,
-          creatorId: adminUser?.id || student.id,
-          tags: ['Placement', drive.companyName, 'CareerPrep'],
-        },
-      });
-      drive.communityId = community.id;
-
-      // Post initial welcome webinar link in the community
-      await prisma.communityPost.create({
-        data: {
-          communityId: community.id,
-          authorId: adminUser?.id || student.id,
-          title: `Welcome to ${drive.companyName} Placement Guidance Session! 🎓`,
-          content: `Welcome students and mentors! The live guidance webinar for ${drive.companyName} placement drive will take place on ${drive.driveDate}. Here is the Google Meet link: ${drive.webinarLink}`,
-          linkUrl: drive.webinarLink,
-          type: 'ANNOUNCEMENT',
-          isPinned: true,
-        },
-      });
-    }
-
-    // 2. Add Student to Community
-    await prisma.communityMember.upsert({
-      where: {
-        communityId_userId: {
-          communityId: community.id,
-          userId: student.id,
-        },
-      },
-      update: { status: 'ACTIVE' },
-      create: {
-        communityId: community.id,
-        userId: student.id,
-        role: 'MEMBER',
-        status: 'ACTIVE',
-      },
+  const email = await sendEmail({
+    to: user.email,
+    subject,
+    html,
+    text
+  });
+  return {
+    inApp: 'saved',
+    email: emailStatus(email),
+    sms: 'disabled'
+  };
+}
+async function ensureDriveCommunity(tx, drive) {
+  let communityId = drive.communityId;
+  if (!communityId) {
+    const community = await tx.community.create({
+      data: {
+        name: `${drive.companyName} Placement Community`,
+        slug: `placement-${drive.id}`,
+        description: `Preparation for ${drive.companyName} on ${drive.driveDate.toISOString().slice(0, 10)}.`,
+        creatorId: drive.creatorId,
+        isPrivate: true,
+        requiresApproval: true,
+        tags: ['Placement', drive.companyName]
+      }
     });
-
-    // 3. Add Accepted Alumni as Moderators to Community
-    for (const alumni of drive.acceptedAlumni) {
-      await prisma.communityMember.upsert({
-        where: {
-          communityId_userId: {
-            communityId: community.id,
-            userId: alumni.alumniId,
-          },
-        },
-        update: { status: 'ACTIVE', role: 'MODERATOR' },
-        create: {
-          communityId: community.id,
-          userId: alumni.alumniId,
-          role: 'MODERATOR',
-          status: 'ACTIVE',
-        },
-      });
-    }
-
-    // Send SMS reminder to student with webinar link
-    if (student.phone) {
-      const joinSms = `AlumniConnect: You are approved for ${drive.companyName} Drive! Joined ${drive.companyName} Community. Webinar: ${drive.webinarLink}`;
-      sendSMS({ to: student.phone, body: joinSms }).catch((e) => console.warn(e.message));
-    }
+    communityId = community.id;
+    await tx.placementDrive.update({
+      where: {
+        id: drive.id
+      },
+      data: {
+        communityId
+      }
+    });
+    await tx.communityMember.create({
+      data: {
+        communityId,
+        userId: drive.creatorId,
+        role: 'ADMIN'
+      }
+    });
+    await tx.communityPost.create({
+      data: {
+        communityId,
+        authorId: drive.creatorId,
+        type: 'ANNOUNCEMENT',
+        isPinned: true,
+        title: 'Welcome to placement preparation',
+        content: drive.webinarLink ? `Guidance meeting: ${drive.webinarLink}` : 'Mentor availability and guidance details will be coordinated here.',
+        linkUrl: drive.webinarLink
+      }
+    });
   }
-
+  return communityId;
+}
+async function acceptanceEmails(driveId, alumniId) {
+  const drive = await requireDrive(driveId);
+  const [alumni, admin] = await Promise.all([prisma.user.findUnique({
+    where: {
+      id: alumniId
+    },
+    select: {
+      firstName: true,
+      lastName: true,
+      email: true
+    }
+  }), prisma.user.findUnique({
+    where: {
+      id: drive.creatorId
+    },
+    select: {
+      email: true
+    }
+  })]);
+  if (!alumni || !admin) return;
+  const name = `${alumni.firstName} ${alumni.lastName}`,
+    date = drive.driveDate.toISOString().slice(0, 10);
+  const adminAddress = process.env.PLACEMENT_ADMIN_EMAIL || admin.email;
+  const adminMail = await sendEmail({
+    to: adminAddress,
+    subject: `Mentor accepted: ${drive.companyName}`,
+    text: `${name} accepted the invitation for ${drive.companyName} on ${date}. The placement community has been created. An availability request is being emailed to the mentor.`,
+    html: `<p>${escape(name)} accepted the ${escape(drive.companyName)} invitation for ${date}.</p><p>The private placement community is ready. An availability request is being emailed to the mentor.</p>`
+  });
+  const schedule = await sendEmail({
+    to: alumni.email,
+    replyTo: adminAddress,
+    subject: `Share your availability: ${drive.companyName} guidance`,
+    text: `Thank you, ${name}, for accepting. The placement drive is on ${date}. Please reply to this email with your available dates, time slots and time zone for the guidance session. The placement administrator will coordinate the final schedule.`,
+    html: `<p>Thank you, ${escape(name)}, for accepting.</p><p>The ${escape(drive.companyName)} placement drive is on ${date}. Please reply with your available dates, time slots and time zone for a guidance session.</p><p>The placement administrator will coordinate the final schedule. Your private event community has been created.</p>`
+  });
+  const invite = await prisma.placementInvitation.findUnique({
+    where: {
+      driveId_alumniId: {
+        driveId,
+        alumniId
+      }
+    }
+  });
+  await prisma.placementInvitation.update({
+    where: {
+      id: invite.id
+    },
+    data: {
+      delivery: {
+        ...(invite.delivery || {}),
+        adminEmail: emailStatus(adminMail),
+        availabilityEmail: emailStatus(schedule)
+      }
+    }
+  });
+}
+async function respondFromEmail(token) {
+  const data = verifyResponse(token);
+  const invitation = await prisma.placementInvitation.findUnique({
+    where: {
+      id: data.invitationId
+    }
+  });
+  if (!invitation || invitation.driveId !== data.driveId || invitation.alumniId !== data.alumniId) fail('Invitation not found.', 404);
+  return respondAlumniInvite({
+    driveId: data.driveId,
+    alumniId: data.alumniId,
+    action: data.action
+  });
+}
+async function sendAlumniInvites({
+  driveId,
+  alumniIds
+}) {
+  await requireOpen(driveId);
+  if (!Array.isArray(alumniIds) || !alumniIds.length || alumniIds.length > 200 || alumniIds.some(id => typeof id !== 'string')) fail('Select 1–200 alumni.');
+  const ids = [...new Set(alumniIds)];
+  const users = await prisma.user.findMany({
+    where: {
+      id: {
+        in: ids
+      },
+      role: 'ALUMNI'
+    },
+    select: {
+      id: true,
+      firstName: true,
+      email: true,
+      phone: true
+    }
+  });
+  if (users.length !== ids.length) fail('Every recipient must be an Alumni account.');
+  const invited = [];
+  let skipped = 0;
+  for (const user of users) {
+    let record;
+    try {
+      record = await prisma.$transaction(async tx => {
+        const drive = await lockOpen(driveId, tx);
+        const i = await tx.placementInvitation.create({
+          data: {
+            driveId,
+            alumniId: user.id
+          }
+        });
+        const notification = await tx.notification.create({
+          data: {
+            userId: user.id,
+            type: 'SYSTEM',
+            title: `Guidance invitation: ${drive.companyName}`,
+            message: `Review the ${drive.companyName} placement invitation on your dashboard.`,
+            data: {
+              driveId
+            }
+          }
+        });
+        await tx.placementDrive.updateMany({
+          where: {
+            id: driveId,
+            status: 'ANNOUNCED'
+          },
+          data: {
+            status: 'ALUMNI_INVITED'
+          }
+        });
+        return {
+          i,
+          drive,
+          notification
+        };
+      });
+    } catch (e) {
+      if (e.code === 'P2002') {
+        skipped++;
+        continue;
+      }
+      throw e;
+    }
+    emitToUser(user.id, 'notification:new', record.notification);
+    emitToUser(user.id, 'company_connect:invites_sent', {
+      driveId
+    });
+    const delivery = await deliver(user, record.drive, 'invite', record.i);
+    await prisma.placementInvitation.update({
+      where: {
+        id: record.i.id
+      },
+      data: {
+        delivery
+      }
+    });
+    invited.push({
+      ...record.i,
+      delivery
+    });
+    emitToUser(user.id, 'company_connect:invites_sent', {
+      driveId
+    });
+  }
+  await notifyAdmins('company_connect:invites_sent', {
+    driveId,
+    invitedCount: invited.length
+  });
   return {
     success: true,
-    registration: registrationRecord,
-    isEligible,
-    communityId: drive.communityId,
-    drive,
+    invited,
+    skipped,
+    drive: await getDriveById(driveId, adminView)
   };
-};
-
-const resetDriveState = (id) => {
-  if (id) {
-    const drive = activeDrives.find((d) => d.id === id);
-    if (drive) {
-      drive.status = 'ANNOUNCED';
-      drive.invitedAlumni = [];
-      drive.acceptedAlumni = [];
-      drive.registeredStudents = [];
-      return drive;
-    }
-    return null;
+}
+async function retryInviteEmails({
+  driveId,
+  alumniIds
+}) {
+  const drive = await requireOpen(driveId);
+  if (!Array.isArray(alumniIds) || !alumniIds.length || alumniIds.length > 200) fail('Select pending invitations to retry.');
+  const invited = [];
+  for (const id of [...new Set(alumniIds)]) {
+    const invitation = drive.invitations.find(i => i.alumniId === id);
+    if (!invitation || invitation.status !== 'INVITED' || invitation.delivery?.email === 'sent') fail('Only failed or pending invitation emails can be retried.');
+    const alumni = await prisma.user.findUnique({
+      where: {
+        id
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true
+      }
+    });
+    if (!alumni) fail('Alumni account no longer exists.', 404);
+    const delivery = await deliver(alumni, drive, 'invite', invitation);
+    await prisma.placementInvitation.update({
+      where: {
+        id: invitation.id
+      },
+      data: {
+        delivery: {
+          ...(invitation.delivery || {}),
+          ...delivery
+        }
+      }
+    });
+    invited.push({
+      ...invitation,
+      delivery
+    });
   }
-
-  // Reset all drives when no specific id provided
-  const resetDrives = [];
-  activeDrives.forEach((drive) => {
-    drive.status = 'ANNOUNCED';
-    drive.invitedAlumni = [];
-    drive.acceptedAlumni = [];
-    drive.registeredStudents = [];
-    resetDrives.push(drive);
+  return {
+    success: true,
+    invited,
+    skipped: 0,
+    drive: await getDriveById(driveId, adminView)
+  };
+}
+async function respondAlumniInvite({
+  driveId,
+  alumniId,
+  action
+}) {
+  if (!['ACCEPT', 'DECLINE'].includes(action)) fail('Action must be ACCEPT or DECLINE.');
+  const status = action === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED';
+  const notifications = await prisma.$transaction(async tx => {
+    const messages = [];
+    const drive = await lockOpen(driveId, tx);
+    const invite = await tx.placementInvitation.findUnique({
+      where: {
+        driveId_alumniId: {
+          driveId,
+          alumniId
+        }
+      }
+    });
+    if (!invite) fail('Invitation not found for your account.', 403);
+    if (invite.status === status) return messages;
+    if (invite.status !== 'INVITED') fail('This invitation has already been answered.', 409);
+    const changed = await tx.placementInvitation.updateMany({
+      where: {
+        id: invite.id,
+        status: 'INVITED'
+      },
+      data: {
+        status,
+        respondedAt: new Date()
+      }
+    });
+    if (!changed.count) fail('Invitation already answered.', 409);
+    if (status === 'ACCEPTED') {
+      drive.communityId = await ensureDriveCommunity(tx, drive);
+      if (drive.communityId) await tx.communityMember.upsert({
+        where: {
+          communityId_userId: {
+            communityId: drive.communityId,
+            userId: alumniId
+          }
+        },
+        update: {
+          status: 'ACTIVE',
+          role: 'MODERATOR'
+        },
+        create: {
+          communityId: drive.communityId,
+          userId: alumniId,
+          role: 'MODERATOR'
+        }
+      });
+      const admins = await tx.user.findMany({
+        where: {
+          role: 'ADMIN'
+        },
+        select: {
+          id: true
+        }
+      });
+      for (const a of admins) messages.push(await tx.notification.create({
+        data: {
+          userId: a.id,
+          type: 'SYSTEM',
+          title: 'Alumni accepted guidance invitation',
+          message: `An alumnus accepted the ${drive.companyName} invitation.`,
+          data: {
+            driveId,
+            alumniId
+          }
+        }
+      }));
+    }
+    return messages;
   });
-  return resetDrives;
-};
-
+  for (const n of notifications) emitToUser(n.userId, 'notification:new', n);
+  if (status === 'ACCEPTED' && notifications.length) await acceptanceEmails(driveId, alumniId);
+  await notifyAdmins('company_connect:alumni_accepted', {
+    driveId
+  });
+  emitToUser(alumniId, 'company_connect:invite_updated', {
+    driveId
+  });
+  return {
+    success: true,
+    status,
+    drive: await getDriveById(driveId, {
+      role: 'ALUMNI',
+      userId: alumniId
+    })
+  };
+}
+async function broadcastToStudents({
+  driveId
+}) {
+  const studentAccounts = await prisma.user.findMany({
+    where: {
+      role: 'STUDENT'
+    },
+    select: {
+      id: true,
+      firstName: true,
+      email: true,
+      studentProfile: true
+    }
+  });
+  const criteria = await requireOpen(driveId);
+  const students = studentAccounts.filter(student => eligibility(criteria, student.studentProfile).isEligible);
+  const drive = await prisma.$transaction(async tx => {
+    const d = await lockOpen(driveId, tx);
+    if (!d.invitations.some(i => i.status === 'ACCEPTED')) fail('At least one alumni mentor must accept first.', 409);
+    if (d.broadcastAt) return null;
+    if (!students.length) fail('No student profiles meet this drive’s CGPA, branch and year criteria.', 409);
+    const claimed = await tx.placementDrive.updateMany({
+      where: {
+        id: driveId,
+        broadcastAt: null,
+        status: {
+          not: 'CLOSED'
+        }
+      },
+      data: {
+        status: 'STUDENTS_NOTIFIED',
+        broadcastAt: new Date()
+      }
+    });
+    if (!claimed.count) return null;
+    const notifications = [];
+    for (const student of students) {
+      await tx.placementBroadcast.create({
+        data: {
+          driveId,
+          studentId: student.id
+        }
+      });
+      notifications.push(await tx.notification.create({
+        data: {
+          userId: student.id,
+          type: 'SYSTEM',
+          title: `${d.companyName} placement announcement`,
+          message: 'Review the drive criteria and register from Placement Drives.',
+          data: {
+            driveId
+          }
+        }
+      }));
+    }
+    return {
+      ...d,
+      notifications
+    };
+  }, {
+    timeout: 20000
+  });
+  if (!drive) return {
+    success: true,
+    alreadyNotified: true,
+    notifiedCount: 0,
+    drive: await getDriveById(driveId, adminView)
+  };
+  for (const notification of drive.notifications) {
+    emitToUser(notification.userId, 'notification:new', notification);
+    emitToUser(notification.userId, 'company_connect:students_notified', {
+      driveId
+    });
+  }
+  const delivery = [];
+  for (const student of students) {
+    const status = await deliver(student, drive, 'student');
+    await prisma.placementBroadcast.update({
+      where: {
+        driveId_studentId: {
+          driveId,
+          studentId: student.id
+        }
+      },
+      data: {
+        delivery: status
+      }
+    });
+    delivery.push(status);
+    emitToUser(student.id, 'company_connect:students_notified', {
+      driveId
+    });
+  }
+  await notifyAdmins('company_connect:students_notified', {
+    driveId,
+    studentCount: students.length
+  });
+  return {
+    success: true,
+    notifiedCount: students.length,
+    delivery,
+    drive: await getDriveById(driveId, adminView)
+  };
+}
+async function registerStudentForDrive({
+  driveId,
+  studentUserId,
+  formDetails = {}
+}) {
+  const rollNumber = requiredText(formDetails.rollNumber, 'Roll number', 60);
+  const result = await prisma.$transaction(async tx => {
+    let drive = await lockOpen(driveId, tx);
+    if (!drive.broadcastAt) fail('Registration has not opened.', 409);
+    const student = await tx.user.findUnique({
+      where: {
+        id: studentUserId
+      },
+      include: {
+        studentProfile: true
+      }
+    });
+    if (!student || student.role !== 'STUDENT') fail('Student account required.', 403);
+    const checked = eligibility(drive, student.studentProfile);
+    // Lock this drive against concurrent community creation and closure.
+    const claimed = await tx.placementDrive.updateMany({
+      where: {
+        id: driveId,
+        status: 'STUDENTS_NOTIFIED'
+      },
+      data: {
+        updatedAt: new Date()
+      }
+    });
+    if (!claimed.count) fail('Drive is no longer open.', 409);
+    drive = await requireDrive(driveId, tx);
+    const existing = await tx.placementRegistration.findUnique({
+      where: {
+        driveId_studentId: {
+          driveId,
+          studentId: studentUserId
+        }
+      }
+    });
+    if (existing) return {
+      registration: existing,
+      communityId: existing.isEligible ? drive.communityId : null
+    };
+    let communityId = drive.communityId;
+    if (checked.isEligible) {
+      communityId = await ensureDriveCommunity(tx, drive);
+      await tx.communityMember.upsert({
+        where: {
+          communityId_userId: {
+            communityId,
+            userId: studentUserId
+          }
+        },
+        update: {
+          status: 'ACTIVE'
+        },
+        create: {
+          communityId,
+          userId: studentUserId
+        }
+      });
+      for (const i of drive.invitations.filter(i => i.status === 'ACCEPTED')) await tx.communityMember.upsert({
+        where: {
+          communityId_userId: {
+            communityId,
+            userId: i.alumniId
+          }
+        },
+        update: {
+          status: 'ACTIVE',
+          role: 'MODERATOR'
+        },
+        create: {
+          communityId,
+          userId: i.alumniId,
+          role: 'MODERATOR'
+        }
+      });
+    }
+    const registration = await tx.placementRegistration.create({
+      data: {
+        driveId,
+        studentId: studentUserId,
+        rollNumber,
+        ...checked,
+        status: checked.isEligible ? 'ENROLLED' : 'REJECTED_CRITERIA'
+      }
+    });
+    return {
+      registration,
+      communityId: checked.isEligible ? communityId : null
+    };
+  }, {
+    timeout: 20000
+  });
+  await notifyAdmins('company_connect:student_registered', {
+    driveId
+  });
+  return {
+    success: true,
+    ...result,
+    isEligible: result.registration.isEligible,
+    drive: await getDriveById(driveId, {
+      role: 'STUDENT',
+      userId: studentUserId
+    })
+  };
+}
 module.exports = {
+  retryInviteEmails,
+  getSearchContext,
+  respondFromEmail,
   getDrives,
   getDriveById,
-  getOrCreateDrive,
   createDrive,
+  closeDrive,
   searchAlumniForCompany,
-  searchAndInviteAlumni,
   sendAlumniInvites,
   respondAlumniInvite,
   broadcastToStudents,
-  registerStudentForDrive,
-  resetDriveState,
+  registerStudentForDrive
 };
-

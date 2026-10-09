@@ -1,173 +1,81 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import api from '../../services/api';
-import './CompanyConnect.css';
-
-export default function CompanyConnectStudent({ currentUser: propUser }) {
-  const { user: authUser } = useAuth();
-  const currentUser = propUser || authUser;
-  const [drive, setDrive] = useState(null);
-  const [driveId, setDriveId] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [registered, setRegistered] = useState(false);
-  const [result, setResult] = useState(null);
-  const [form, setForm] = useState({
-    rollNumber: '',
-    cgpa: '',
-    branch: currentUser?.studentProfile?.branch || 'Information Technology',
-  });
-
-  useEffect(() => {
-    api.get('/company-connect/drives')
-      .then((res) => {
-        const drives = res.data?.drives || [];
-        if (drives.length > 0) {
-          const active = drives.find(d => d.status === 'STUDENTS_NOTIFIED') || drives[0];
-          setDrive(active);
-          setDriveId(active.id);
-          const found = active.registeredStudents?.find(
-            (s) => s.studentId === currentUser?.id
-          );
-          if (found) {
-            setRegistered(true);
-            setResult(found);
-          }
-        }
-      })
-      .catch(() => {});
-  }, [currentUser]);
-
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    if (!form.rollNumber || !form.cgpa || !driveId) return;
+import { studentProfileService } from '../../services/studentProfileService';
+import { useSocket } from '../../context/SocketContext';
+import './company-connect-v2.css';
+export default function CompanyConnectStudent() {
+  const {
+      socket
+    } = useSocket(),
+    location = useLocation();
+  const [drives, setDrives] = useState([]),
+    [id, setId] = useState(new URLSearchParams(location.search).get('driveId') || ''),
+    [profile, setProfile] = useState(null),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(''),
+    [busy, setBusy] = useState(false),
+    [roll, setRoll] = useState('');
+  const lock = useRef(false),
+    seq = useRef(0);
+  const load = useCallback(async () => {
+    const n = ++seq.current;
     setLoading(true);
     try {
-      const res = await api.post('/company-connect/register', {
-        driveId,
-        formDetails: form,
-      });
-      setResult(res.data.registration);
-      setRegistered(true);
-    } catch (err) {
-      alert(err.response?.data?.error || 'Registration failed');
+      const [d, p] = await Promise.all([api.get('/company-connect/drives'), studentProfileService.getProfile()]);
+      if (n !== seq.current) return;
+      const rows = d.data.drives || [];
+      setDrives(rows);
+      setId(id => rows.some(r => r.id === id) ? id : rows[0]?.id || '');
+      setProfile(p.data?.profile || p.data?.studentProfile || null);
+      setError('');
+    } catch (e) {
+      if (n === seq.current) setError(e.response?.data?.message || 'Unable to load placement drives.');
+    } finally {
+      if (n === seq.current) setLoading(false);
     }
-    setLoading(false);
-  };
-
-  if (!drive) return <div className="cc-student-loading">Loading drive details...</div>;
-
-  return (
-    <div className="cc-student-container">
-      {/* Top back navigation */}
-      <div style={{ marginBottom: '16px' }}>
-        <Link to="/student/dashboard" style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '6px',
-          color: '#4f46e5',
-          textDecoration: 'none',
-          fontWeight: 600,
-          fontSize: '13px',
-        }}>
-          ← Back to Student Dashboard
-        </Link>
-      </div>
-
-      {/* Drive Announcement Banner */}
-      <div className="cc-student-banner">
-        <div className="cc-student-banner-icon">🏢</div>
-        <div>
-          <h2>{drive.companyName} Placement Drive</h2>
-          <p>📅 {drive.driveDate} · Min CGPA: {drive.minCgpa} · {drive.eligibleBranches?.join(', ')}</p>
-          <p className="cc-webinar">
-            🔗 Webinar: <a href={drive.webinarLink} target="_blank" rel="noopener noreferrer">{drive.webinarLink}</a>
-          </p>
-        </div>
-      </div>
-
-      {/* Alumni mentors */}
-      {drive.acceptedAlumni?.length > 0 && (
-        <div className="cc-mentors-section">
-          <h3>👥 Alumni Mentors Ready to Guide You</h3>
-          <div className="cc-mentors-list">
-            {drive.acceptedAlumni.map((a) => (
-              <div key={a.alumniId} className="cc-mentor-chip">
-                <span className="cc-mentor-av">{a.name?.charAt(0)}</span>
-                <span>{a.name}</span>
-                <span className="cc-mentor-co">· {a.company}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Registration Form or Result */}
-      {!registered ? (
-        <div className="cc-student-form-card">
-          <h3>📝 Register for {drive.companyName} Drive</h3>
-          <p>Fill in your details. Our AI will automatically check your eligibility.</p>
-          <form onSubmit={handleRegister} className="cc-student-form">
-            <div className="cc-form-group">
-              <label>Roll Number *</label>
-              <input
-                value={form.rollNumber}
-                onChange={(e) => setForm({ ...form, rollNumber: e.target.value })}
-                placeholder="e.g. 22IT101"
-                required
-              />
-            </div>
-            <div className="cc-form-group">
-              <label>Current CGPA *</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="10"
-                value={form.cgpa}
-                onChange={(e) => setForm({ ...form, cgpa: e.target.value })}
-                placeholder="e.g. 8.5"
-                required
-              />
-            </div>
-            <div className="cc-form-group">
-              <label>Branch</label>
-              <input
-                value={form.branch}
-                onChange={(e) => setForm({ ...form, branch: e.target.value })}
-                placeholder="Information Technology"
-              />
-            </div>
-            <button type="submit" className="cc-action-btn" disabled={loading}>
-              {loading ? '⏳ Checking Eligibility...' : '🤖 Submit — AI Eligibility Check'}
-            </button>
-          </form>
-        </div>
-      ) : (
-        <div className={`cc-result-card ${result?.isEligible ? 'cc-result-eligible' : 'cc-result-ineligible'}`}>
-          <div className="cc-result-icon">{result?.isEligible ? '🎉' : '😔'}</div>
-          <h3>{result?.isEligible ? 'Congratulations! You are Eligible!' : 'Not Eligible for This Drive'}</h3>
-          <div className="cc-result-reasons">
-            {result?.eligibilityReasons?.map((r, i) => (
-              <div key={i} className="cc-reason">{r}</div>
-            ))}
-          </div>
-          {result?.isEligible && (
-            <div className="cc-result-next">
-              <p>✅ You have been added to <strong>{drive.companyName} Placement Community!</strong></p>
-              <p>📱 Check your SMS for the webinar link.</p>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '14px' }}>
-                <a href={drive.webinarLink} target="_blank" rel="noopener noreferrer" className="cc-webinar-btn">
-                  🎥 Join Webinar
-                </a>
-                <Link to="/communities" className="cc-webinar-btn" style={{ background: '#4f46e5' }}>
-                  💬 Open Placement Community
-                </Link>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  }, []);
+  useEffect(() => {
+    load();
+    return () => {
+      seq.current++;
+    };
+  }, [load]);
+  useEffect(() => {
+    socket?.on('company_connect:students_notified', load);
+    socket?.on('connect', load);
+    return () => {
+      socket?.off('company_connect:students_notified', load);
+      socket?.off('connect', load);
+    };
+  }, [socket, load]);
+  const drive = drives.find(d => d.id === id),
+    result = drive?.registeredStudents?.[0],
+    closed = drive?.status === 'CLOSED' || drive?.driveDate < new Date().toISOString().slice(0, 10);
+  async function submit(e) {
+    e.preventDefault();
+    if (lock.current || !drive) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await api.post('/company-connect/register', {
+        driveId: drive.id,
+        formDetails: {
+          rollNumber: roll
+        }
+      });
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.message || 'Registration failed. Please retry.');
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+  return <main className="cc-student-page"><header className="cc-student-hero"><h1>Placement Drives</h1><p>Prepare with alumni who have experience at the hiring company.</p></header>{error && <p role="alert">{error} <button onClick={load}>Retry</button></p>}{loading && !drive ? <p role="status">Loading…</p> : !drive ? <section className="cc-student-card"><h2>No placement announcements yet</h2><p>Drives appear here after alumni mentors accept and Admin announces the drive.</p><button onClick={load}>Refresh</button></section> : <><section className="cc-student-card"><label>Choose a drive<select value={id} onChange={e => {
+            setId(e.target.value);
+            setRoll('');
+            setError('');
+          }} disabled={busy}>{drives.map(d => <option key={d.id} value={d.id}>{d.companyName} · {d.driveDate} · {d.status}</option>)}</select></label><h2>{drive.companyName}</h2><p>{drive.driveDate} · Minimum CGPA: {drive.minCgpa} · {drive.eligibleBranches?.join(', ') || 'All branches'} · {drive.eligibleYears?.length ? `Years ${drive.eligibleYears.join(', ')}` : 'All study years'}</p><div className="cc-mentors">{drive.acceptedAlumni?.map(a => <span key={a.alumniId}>{a.name}{a.company ? ` · ${a.company}` : ''}</span>)}</div></section><section className="cc-student-card">{result ? <><h2>{result.isEligible ? 'Registration confirmed' : 'Eligibility requirements not met'}</h2><p>Saved registration: {result.rollNumber}</p><ul>{result.eligibilityReasons?.map(r => <li key={r}>{r}</li>)}</ul>{result.isEligible ? <>{drive.communityId && <Link to={`/communities/placement-${drive.id}`}>Open placement community</Link>}{drive.webinarLink ? <a href={drive.webinarLink} target="_blank" rel="noopener noreferrer">Join guidance meeting</a> : <p>The meeting link has not been published yet.</p>}</> : <Link to="/student/profile">Review your student profile</Link>}</> : closed ? <h2>Registration closed</h2> : <><h2>Register for this drive</h2><p>Eligibility uses your saved profile. Update missing information before submitting.</p><p>Branch: {profile?.branch || 'Not provided'} · CGPA: {profile?.cgpa ?? 'Not provided'} · Study year: {profile?.currentYear ?? 'Not provided'}</p><Link to="/student/profile">Review profile</Link><form onSubmit={submit}><label>Roll number<input value={roll} onChange={e => setRoll(e.target.value)} maxLength={60} required disabled={busy} /></label><button disabled={busy} type="submit">{busy ? 'Checking eligibility…' : 'Register and check eligibility'}</button></form></>}</section></>}</main>;
 }

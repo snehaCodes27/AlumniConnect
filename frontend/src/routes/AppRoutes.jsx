@@ -16,6 +16,11 @@ import StudentProfilePage from '../pages/dashboards/StudentProfilePage';
 import MentorshipHubPage from '../pages/dashboards/MentorshipHubPage';
 import AlumniDashboard from '../pages/dashboards/AlumniDashboard';
 import AlumniDirectoryPage from '../pages/dashboards/AlumniDirectoryPage';
+import AdminShell from '../layouts/AdminShell';
+import AdminResourcePage from '../pages/dashboards/AdminResourcePage';
+import AdminReportsPage from '../pages/dashboards/AdminReportsPage';
+import DonationPredictionPage from '../pages/dashboards/DonationPredictionPage';
+import StudentShell from '../layouts/StudentShell';
 import AdminDashboard from '../pages/dashboards/AdminDashboard';
 import JobsPortalPage from '../pages/dashboards/JobsPortalPage';
 import EventsHubPage from '../pages/dashboards/EventsHubPage';
@@ -60,7 +65,7 @@ export default function AppRoutes() {
             <Route path="/student/dashboard" element={<StudentDashboard />} />
             <Route path="/student/profile" element={<StudentProfilePage />} />
             <Route path="/student/mentorship" element={<MentorshipHubPage />} />
-            <Route path="/student/placement" element={<CompanyConnectStudent />} />
+            <Route path="/student/placement" element={<StudentShell><CompanyConnectStudent /></StudentShell>} />
           </Route>
 
           {/* Protected Alumni Routes */}
@@ -71,9 +76,15 @@ export default function AppRoutes() {
 
           {/* Protected Admin Routes */}
           <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
-            <Route path="/admin/dashboard" element={<AdminDashboard />} />
-            <Route path="/admin/company-connect" element={<CompanyConnectAdmin />} />
-            <Route path="/admin/donations" element={<AdminDashboard />} />
+            <Route element={<AdminShell />}>
+              <Route path="/admin/dashboard" element={<AdminDashboard />} />
+              <Route path="/admin/company-connect" element={<CompanyConnectAdmin />} />
+              <Route path="/admin/donations" element={<DonationPredictionPage />} />
+              {['users','alumni','students','mentorship','jobs','events','community','companies'].map(resource => <Route key={resource} path={`/admin/${resource}`} element={<AdminResourcePage resource={resource} />} />)}
+              <Route path="/admin/reports" element={<AdminReportsPage />} />
+              <Route path="/admin/settings" element={<AdminReportsPage settings />} />
+              <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+            </Route>
           </Route>
 
           {/* Catch-all redirect */}

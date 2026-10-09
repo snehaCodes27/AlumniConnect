@@ -7,64 +7,18 @@ const prisma = require('../config/prisma');
 
 /** ── KPI Summary Cards ───────────────────────────────────────────────── */
 const getKpiStats = async () => {
-  const now = new Date();
-  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-
-  const [
-    totalStudents,
-    totalAlumni,
-    activeAlumni,
-    mentorshipSessions,
-    jobApplications,
-    studentsShortlisted,
-    eventsCount,
-    communityPosts,
-    // Last month comparisons
-    lastMonthStudents,
-    lastMonthAlumni,
-    lastMonthActiveAlumni,
-    lastMonthMentorship,
-    lastMonthApplications,
-    lastMonthShortlisted,
-    lastMonthEvents,
-    lastMonthPosts,
-  ] = await Promise.all([
-    prisma.user.count({ where: { role: 'STUDENT', isApproved: true } }),
-    prisma.user.count({ where: { role: 'ALUMNI', isApproved: true } }),
-    prisma.user.count({ where: { role: 'ALUMNI', isApproved: true, lastLoginAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } }),
-    prisma.mentorshipRequest.count({ where: { status: { in: ['ACCEPTED', 'COMPLETED'] } } }),
+  const counts=await Promise.all([
+    prisma.user.count({where:{role:'STUDENT'}}),
+    prisma.user.count({where:{role:'ALUMNI'}}),
+    prisma.user.count({where:{role:'ALUMNI',lastLoginAt:{gte:new Date(Date.now()-30*24*60*60*1000)}}}),
+    prisma.mentorshipRequest.count({where:{status:{in:['ACCEPTED','COMPLETED']}}}),
     prisma.jobApplication.count(),
-    prisma.jobApplication.count({ where: { status: 'SHORTLISTED' } }),
-    prisma.event.count({ where: { status: { in: ['PUBLISHED', 'COMPLETED'] } } }),
-    prisma.communityPost.count({ where: { status: 'ACTIVE' } }),
-    // Last month
-    prisma.user.count({ where: { role: 'STUDENT', isApproved: true, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.user.count({ where: { role: 'ALUMNI', isApproved: true, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.user.count({ where: { role: 'ALUMNI', isApproved: true, lastLoginAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.mentorshipRequest.count({ where: { status: { in: ['ACCEPTED', 'COMPLETED'] }, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.jobApplication.count({ where: { createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.jobApplication.count({ where: { status: 'SHORTLISTED', updatedAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.event.count({ where: { status: { in: ['PUBLISHED', 'COMPLETED'] }, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
-    prisma.communityPost.count({ where: { status: 'ACTIVE', createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
+    prisma.jobApplication.count({where:{status:'SHORTLISTED'}}),
+    prisma.event.count({where:{status:{in:['PUBLISHED','COMPLETED']}}}),
+    prisma.communityPost.count({where:{status:'ACTIVE'}})
   ]);
-
-  const pctChange = (current, prev) => {
-    if (prev === 0) return current > 0 ? 100 : 0;
-    return Math.round(((current - prev) / prev) * 100);
-  };
-
-  return {
-    totalStudents: { value: totalStudents, change: pctChange(totalStudents, totalStudents - lastMonthStudents) },
-    totalAlumni: { value: totalAlumni, change: pctChange(totalAlumni, totalAlumni - lastMonthAlumni) },
-    activeAlumni: { value: activeAlumni, change: pctChange(activeAlumni, activeAlumni - lastMonthActiveAlumni) },
-    mentorshipSessions: { value: mentorshipSessions, change: pctChange(mentorshipSessions, mentorshipSessions - lastMonthMentorship) },
-    jobApplications: { value: jobApplications, change: pctChange(jobApplications, jobApplications - lastMonthApplications) },
-    studentsShortlisted: { value: studentsShortlisted, change: pctChange(studentsShortlisted, studentsShortlisted - lastMonthShortlisted) },
-    eventsWebinars: { value: eventsCount, change: pctChange(eventsCount, eventsCount - lastMonthEvents) },
-    communityPosts: { value: communityPosts, change: pctChange(communityPosts, communityPosts - lastMonthPosts) },
-  };
+  // Historical login/status snapshots are unavailable; do not invent percentage trends.
+  return Object.fromEntries(['totalStudents','totalAlumni','activeAlumni','mentorshipSessions','jobApplications','studentsShortlisted','eventsWebinars','communityPosts'].map((key,i)=>[key,{value:counts[i],change:null}]));
 };
 
 /** ── Platform Activity Chart (last 10 months) ───────────────────────── */
@@ -166,7 +120,7 @@ const getRecentActivity = async (limit = 10) => {
     ...recentMentorships.map((m) => ({
       id: `mentorship-${m.id}`,
       type: 'mentorship_accepted',
-      message: 'Mentorship session completed',
+      message: 'Mentorship request accepted',
       timestamp: m.updatedAt,
     })),
     ...recentApplications.map((a) => ({
@@ -229,7 +183,7 @@ const getTopCompaniesByApplications = async (limit = 5) => {
   });
 
   // Aggregate by company name
-  const companyMap = {};
+  const companyMap = Object.create(null);
   for (const job of jobs) {
     const co = job.company;
     companyMap[co] = (companyMap[co] || 0) + job._count.applications;

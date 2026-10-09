@@ -90,3 +90,12 @@ ai-service/models/*.json
 !docs/DONATION_PREDICTION.md
 
 *.md
+
+.local-backups/
+
+!docs/ADMIN_COMPANY_CONNECT.md
+!docs/frontend-change-log.md
+!docs/DONATION_PREDICTION.md
+!backend/prisma/migrations/20261009090000_persist_company_connect/migration.sql
+*.sql
+*.md

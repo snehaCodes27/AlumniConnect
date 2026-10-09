@@ -839,3 +839,66 @@ model CommunityPostLike {
   @@index([userId])
   @@map("community_post_likes")
 }
+
+
+// Durable Company Connect placement workflow.
+model PlacementDrive {
+  id String @id @default(uuid())
+  companyName String
+  driveDate DateTime
+  minCgpa Decimal @db.Decimal(3, 2)
+  eligibleBranches String[] @default([])
+  eligibleYears Int[] @default([])
+  webinarLink String?
+  status String @default("ANNOUNCED")
+  creatorId String
+  communityId String? @unique
+  broadcastAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  invitations PlacementInvitation[]
+  registrations PlacementRegistration[]
+  broadcasts PlacementBroadcast[]
+  @@index([status, driveDate])
+  @@map("placement_drives")
+}
+model PlacementInvitation {
+  id String @id @default(uuid())
+  driveId String
+  alumniId String
+  status String @default("INVITED")
+  sentAt DateTime @default(now())
+  respondedAt DateTime?
+  delivery Json?
+  drive PlacementDrive @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  @@unique([driveId, alumniId])
+  @@index([alumniId])
+  @@map("placement_invitations")
+}
+model PlacementRegistration {
+  id String @id @default(uuid())
+  driveId String
+  studentId String
+  rollNumber String
+  branch String?
+  cgpa Decimal? @db.Decimal(3, 2)
+  currentYear Int?
+  isEligible Boolean
+  eligibilityReasons String[] @default([])
+  status String
+  registeredAt DateTime @default(now())
+  drive PlacementDrive @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  @@unique([driveId, studentId])
+  @@index([studentId])
+  @@map("placement_registrations")
+}
+model PlacementBroadcast {
+  id String @id @default(uuid())
+  driveId String
+  studentId String
+  delivery Json?
+  createdAt DateTime @default(now())
+  drive PlacementDrive @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  @@unique([driveId, studentId])
+  @@map("placement_broadcasts")
+}
