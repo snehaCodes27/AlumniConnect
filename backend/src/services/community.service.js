@@ -269,35 +269,77 @@ async function joinCommunity(communityId, userId) {
     throw error;
   }
 
-  // Upsert member record to guarantee no duplicates
-  const membership = await prisma.communityMember.upsert({
-    where: {
-      communityId_userId: {
-        communityId,
-        userId,
-      },
-    },
-    update: {
-      status: 'ACTIVE',
-    },
-    create: {
-      communityId,
-      userId,
-      role: 'MEMBER',
-      status: 'ACTIVE',
-    },
-    include: {
-      user: {
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          profilePhoto: true,
-          role: true,
+  // Upsert member record with race-condition safety
+  let membership;
+  try {
+    membership = await prisma.communityMember.upsert({
+      where: {
+        communityId_userId: {
+          communityId,
+          userId,
         },
       },
-    },
-  });
+      update: {
+        status: 'ACTIVE',
+      },
+      create: {
+        communityId,
+        userId,
+        role: 'MEMBER',
+        status: 'ACTIVE',
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            profilePhoto: true,
+            role: true,
+          },
+        },
+      },
+    });
+  } catch (err) {
+    // Handle Prisma unique constraint race condition (P2002 or unique constraint violation)
+    if (err.code === 'P2002' || err.message?.includes('Unique constraint') || err.message?.includes('unique constraint')) {
+      membership = await prisma.communityMember.findUnique({
+        where: {
+          communityId_userId: { communityId, userId },
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              profilePhoto: true,
+              role: true,
+            },
+          },
+        },
+      });
+      if (membership && membership.status !== 'ACTIVE') {
+        membership = await prisma.communityMember.update({
+          where: { id: membership.id },
+          data: { status: 'ACTIVE' },
+          include: {
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                profilePhoto: true,
+                role: true,
+              },
+            },
+          },
+        });
+      }
+    } else {
+      throw err;
+    }
+  }
 
   const memberCount = await prisma.communityMember.count({
     where: { communityId, status: 'ACTIVE' },
@@ -841,30 +883,41 @@ async function toggleLikePost(postId, userId) {
 
   let hasLiked = false;
   if (existing) {
-    await prisma.communityPostLike.delete({
-      where: { id: existing.id },
-    });
-    await prisma.communityPost.update({
-      where: { id: postId },
-      data: { likesCount: { decrement: 1 } },
-    });
+    try {
+      await prisma.communityPostLike.deleteMany({
+        where: { postId, userId },
+      });
+    } catch (e) {
+      // Ignore if already deleted concurrently
+    }
     hasLiked = false;
   } else {
-    await prisma.communityPostLike.create({
-      data: {
-        postId,
-        userId,
-      },
-    });
-    await prisma.communityPost.update({
-      where: { id: postId },
-      data: { likesCount: { increment: 1 } },
-    });
-    hasLiked = true;
+    try {
+      await prisma.communityPostLike.create({
+        data: {
+          postId,
+          userId,
+        },
+      });
+      hasLiked = true;
+    } catch (e) {
+      // If concurrent request already inserted the like
+      if (e.code === 'P2002' || e.message?.includes('Unique constraint') || e.message?.includes('unique constraint')) {
+        hasLiked = true;
+      } else {
+        throw e;
+      }
+    }
   }
 
-  const updatedPost = await prisma.communityPost.findUnique({
+  // Count actual likes to keep count 100% accurate and prevent negatives
+  const likesCount = await prisma.communityPostLike.count({
+    where: { postId },
+  });
+
+  const updatedPost = await prisma.communityPost.update({
     where: { id: postId },
+    data: { likesCount },
     select: { likesCount: true, communityId: true },
   });
 

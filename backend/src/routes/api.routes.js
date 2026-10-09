@@ -15,6 +15,7 @@ const chatRoutes = require('./chat.routes');
 const communityRoutes = require('./community.routes');
 const gamificationRoutes = require('./gamification.routes');
 const testRoutes = require('./test.routes');
+const companyConnectRoutes = require('./companyConnect.routes');
 
 const router = express.Router();
 
@@ -35,5 +36,6 @@ router.use('/chat', chatRoutes);
 router.use('/communities', communityRoutes);
 router.use('/gamification', gamificationRoutes);
 router.use('/test', testRoutes);
+router.use('/company-connect', companyConnectRoutes);
 
 module.exports = router;

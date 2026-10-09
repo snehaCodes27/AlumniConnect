@@ -407,7 +407,7 @@ const sendMentorshipRequest = async ({ studentId, alumniId, topic = 'General Men
   });
 
   // Calculate match score to attach in request
-  const match = calculateMentorMatch(student.studentProfile, alumni.alumniProfile);
+  const match = calculateMentorMatch(student?.studentProfile || {}, alumni.alumniProfile);
 
   // Create Mentorship Request
   const mentorshipRequest = await prisma.mentorshipRequest.create({
@@ -619,12 +619,13 @@ const respondToMentorshipRequest = async ({ alumniId, requestId, status, respons
   // Additionally dispatch SMS notification to student if mentorship was accepted and phone is available
   if (status === 'ACCEPTED' && updatedRequest.student?.phone) {
     try {
-      await sendSMS({
+      console.log(`[Mentorship Accept SMS] Sending SMS to student phone: ${updatedRequest.student.phone}`);
+      const smsResult = await sendSMS({
         to: updatedRequest.student.phone,
-        body: 'AlumniConnect: Your mentorship request has been accepted. You can now connect with your mentor.',
+        body: `AlumniConnect: Great news! Your mentorship request was accepted by ${request.alumni.firstName} ${request.alumni.lastName}. Check your Mentorship inbox to chat!`,
       });
+      console.log(`[Mentorship Accept SMS Success]:`, smsResult);
     } catch (smsError) {
-      // Graceful error handling: SMS failure never breaks the mentorship acceptance flow
       console.warn(`[Mentorship SMS Warning] Failed to send SMS to student ${request.studentId}:`, smsError.message);
     }
   }

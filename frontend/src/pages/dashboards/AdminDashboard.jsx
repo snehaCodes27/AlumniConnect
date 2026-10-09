@@ -50,6 +50,7 @@ const NAV_ITEMS = [
   { key: 'alumni', label: 'Alumni', icon: UserCheck, href: '/admin/alumni' },
   { key: 'students', label: 'Students', icon: GraduationCap, href: '/admin/students' },
   { key: 'mentorship', label: 'Mentorship', icon: BookOpen, href: '/admin/mentorship' },
+  { key: 'company-connect', label: '🤖 Company Connect', icon: Zap, href: '/admin/company-connect' },
   { key: 'jobs', label: 'Jobs & Placements', icon: Briefcase, href: '/admin/jobs' },
   { key: 'events', label: 'Events', icon: Calendar, href: '/admin/events' },
   { key: 'community', label: 'Community', icon: MessageSquare, href: '/admin/community' },
@@ -65,6 +66,20 @@ const ACTIVITY_ICONS = {
   job_application: { icon: Briefcase, bg: 'bg-amber-500/15', color: 'text-amber-400' },
   event_created: { icon: Calendar, bg: 'bg-violet-500/15', color: 'text-violet-400' },
 };
+
+// ── Color palette ──────────────────────────────────────────────────────────
+const COLORS = {
+  primary: '#6366f1',
+  secondary: '#8b5cf6',
+  success: '#10b981',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+  info: '#3b82f6',
+  cyan: '#06b6d4',
+  pink: '#ec4899',
+  chart: ['#6366f1', '#10b981', '#f59e0b', '#8b5cf6'],
+};
+
 
 const timeAgo = (value) => {
   if (!value) return '';

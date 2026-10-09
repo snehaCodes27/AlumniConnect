@@ -8,6 +8,7 @@ import { recommendationService } from '../../services/recommendationService';
 import NotificationDropdown from '../../components/NotificationDropdown';
 import MentorshipRequestModal from '../../components/MentorshipRequestModal';
 import { eventService } from '../../services/eventService';
+import api from '../../services/api';
 import {
   LayoutDashboard, Users, BookOpen, Briefcase, FileText,
   UserCheck, MessageSquare, Calendar, Globe, BookMarked,
@@ -36,6 +37,7 @@ export default function StudentDashboard() {
   const [selectedMentor, setSelectedMentor] = useState(null);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
   const [refreshingRecs, setRefreshingRecs] = useState(false);
+  const [activeDrive, setActiveDrive] = useState(null);
 
   // Real Dynamic AI Recommendations
   const [aiRecs, setAiRecs] = useState({
@@ -56,7 +58,7 @@ export default function StudentDashboard() {
   const fetchDashboardData = useCallback(async (forceRefresh = false) => {
     try {
       if (!forceRefresh) setLoadingRecommendations(true);
-      const [connRes, sentRes, activeRes, eventsRes, recRes] = await Promise.all([
+      const [connRes, sentRes, activeRes, eventsRes, recRes, driveRes] = await Promise.all([
         connectionService.getMyConnections({ limit: 10 }),
         mentorshipService.getSentRequests({ status: 'PENDING', limit: 10 }),
         mentorshipService.getActiveMentorships(),
@@ -65,6 +67,7 @@ export default function StudentDashboard() {
           console.warn('Failed to load AI recommendations:', err);
           return { success: false, data: {} };
         }),
+        api.get('/company-connect/drives').catch(() => ({ data: { drives: [] } })),
       ]);
 
       if (connRes?.success) setConnections(connRes.data.connections || []);
@@ -73,6 +76,9 @@ export default function StudentDashboard() {
       if (eventsRes?.data) setMyEventRegistrations(eventsRes.data || []);
       if (recRes?.success && recRes.data) {
         setAiRecs(recRes.data);
+      }
+      if (driveRes?.data?.drives?.length > 0) {
+        setActiveDrive(driveRes.data.drives[0]);
       }
     } catch (err) {
       console.error('Failed to load student dashboard data:', err);
@@ -141,6 +147,75 @@ export default function StudentDashboard() {
               </button>
             </div>
           </div>
+
+          {/* Placement Drive Announcement Banner */}
+          {activeDrive && (
+            <div style={{
+              background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)',
+              borderRadius: 16,
+              padding: '20px 24px',
+              marginBottom: 24,
+              color: '#fff',
+              boxShadow: '0 8px 24px rgba(67, 56, 202, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 16,
+              border: '1px solid rgba(165, 180, 252, 0.3)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 14,
+                  background: 'rgba(255, 255, 255, 0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 26,
+                }}>
+                  🏢
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, background: '#ef4444', color: '#fff', padding: '2px 8px', borderRadius: 10, fontWeight: 800, textTransform: 'uppercase' }}>
+                      Placement Drive
+                    </span>
+                    <span style={{ fontSize: 12, color: '#c7d2fe', fontWeight: 600 }}>
+                      📅 {activeDrive.driveDate}
+                    </span>
+                  </div>
+                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#fff' }}>
+                    {activeDrive.companyName} Placement Drive Announced!
+                  </h3>
+                  <p style={{ margin: '4px 0 0', fontSize: 13, color: '#e0e7ff' }}>
+                    Alumni mentors ({activeDrive.acceptedAlumni?.map(a => a.name).join(', ') || 'Senior Alumni'}) are ready to guide you. Check eligibility and register now!
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => navigate('/student/placement')}
+                style={{
+                  background: 'linear-gradient(90deg, #10b981, #059669)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 12,
+                  padding: '12px 22px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span>Register & Join Mentorship</span>
+                <ArrowRight size={15} />
+              </button>
+            </div>
+          )}
 
           {/* Stats Bar */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>

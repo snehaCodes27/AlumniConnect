@@ -15,7 +15,7 @@ router.get('/:id', optionalAuthenticateToken, jobController.getJobDetails);
 router.use(authenticateToken);
 
 // Student Routes
-router.get('/applications/my', authorizeRoles('STUDENT', 'ADMIN'), jobController.getStudentApplications);
+router.get('/applications/my', authorizeRoles('STUDENT', 'ALUMNI', 'ADMIN'), jobController.getStudentApplications);
 router.post('/:id/apply', authorizeRoles('STUDENT', 'ADMIN'), jobController.applyForJob);
 router.delete('/applications/:applicationId/withdraw', authorizeRoles('STUDENT', 'ADMIN'), jobController.withdrawApplication);
 

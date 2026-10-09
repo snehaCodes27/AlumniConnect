@@ -18,4 +18,12 @@ module.exports = {
     whatsappFrom: process.env.TWILIO_WHATSAPP_FROM,
     phoneNumber: process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_WHATSAPP_FROM?.replace('whatsapp:', ''),
   },
+  textbee: {
+    apiKey: process.env.TEXTBEE_API_KEY,
+    deviceId: process.env.TEXTBEE_DEVICE_ID,
+  },
+  email: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 };

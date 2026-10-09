@@ -23,6 +23,8 @@ import EventCommunityPage from '../pages/dashboards/EventCommunityPage';
 import ChatPage from '../pages/dashboards/ChatPage';
 import CommunitiesHubPage from '../pages/dashboards/CommunitiesHubPage';
 import LeaderboardPage from '../pages/dashboards/LeaderboardPage';
+import CompanyConnectAdmin from '../pages/CompanyConnect/CompanyConnectAdmin';
+import CompanyConnectStudent from '../pages/CompanyConnect/CompanyConnectStudent';
 
 export default function AppRoutes() {
   return (
@@ -58,6 +60,7 @@ export default function AppRoutes() {
             <Route path="/student/dashboard" element={<StudentDashboard />} />
             <Route path="/student/profile" element={<StudentProfilePage />} />
             <Route path="/student/mentorship" element={<MentorshipHubPage />} />
+            <Route path="/student/placement" element={<CompanyConnectStudent />} />
           </Route>
 
           {/* Protected Alumni Routes */}
@@ -69,6 +72,7 @@ export default function AppRoutes() {
           {/* Protected Admin Routes */}
           <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
+            <Route path="/admin/company-connect" element={<CompanyConnectAdmin />} />
           </Route>
 
           {/* Catch-all redirect */}

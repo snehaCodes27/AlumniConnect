@@ -18,6 +18,7 @@ import {
   LogOut,
   Menu,
   Search,
+  Zap,
 } from "lucide-react";
 import "./student-shell.css";
 const navItems = [
@@ -27,6 +28,7 @@ const navItems = [
     path: "/student/dashboard",
     active: false,
   },
+  { icon: Zap, label: "Placement Drive", path: "/student/placement" },
   { icon: Sparkles, label: "Mentorship Hub", path: "/student/mentorship" },
   { icon: Users, label: "Find Alumni", path: "/alumni/directory" },
   { icon: Globe, label: "Communities", path: "/communities" },

@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { alumniProfileService } from "../../services/alumniProfileService";
+import api from "../../services/api";
 
 export function completionItems(user, profile) {
   return [
@@ -133,6 +134,48 @@ export default function AlumniOverview({
   search,
 }) {
   const pending = mentorshipRequests.filter((r) => r.status === "PENDING");
+  const [driveInvite, setDriveInvite] = useState(null);
+  const [driveAccepting, setDriveAccepting] = useState(false);
+  const [driveAcceptedStatus, setDriveAcceptedStatus] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    api.get('/company-connect/drives')
+      .then((res) => {
+        const drives = res.data?.drives || [];
+        for (const d of drives) {
+          const inv = d.invitedAlumni?.find(a => a.alumniId === user.id);
+          if (inv) {
+            setDriveInvite({ drive: d, invite: inv });
+            if (inv.status === 'ACCEPTED' || d.acceptedAlumni?.some(a => a.alumniId === user.id)) {
+              setDriveAcceptedStatus(true);
+            }
+            break;
+          }
+        }
+      })
+      .catch(() => {});
+  }, [user?.id]);
+
+  const handleDriveResponse = async (action) => {
+    if (!driveInvite) return;
+    setDriveAccepting(true);
+    try {
+      await api.post('/company-connect/respond', {
+        driveId: driveInvite.drive.id,
+        action,
+      });
+      if (action === 'ACCEPT') {
+        setDriveAcceptedStatus(true);
+      } else {
+        setDriveInvite(null);
+      }
+    } catch (err) {
+      console.error('Failed to respond to drive:', err);
+    } finally {
+      setDriveAccepting(false);
+    }
+  };
   const upcoming = myEvents
     .filter(
       (e) =>
@@ -221,6 +264,117 @@ export default function AlumniOverview({
     <div className="ad-overview">
       <div className="ad-body-grid">
         <div className="ad-primary">
+          {driveInvite && (
+            <div style={{
+              background: driveAcceptedStatus
+                ? 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)'
+                : 'linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)',
+              borderRadius: '16px',
+              padding: '20px 24px',
+              marginBottom: '20px',
+              color: '#fff',
+              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+              border: driveAcceptedStatus ? '1px solid #059669' : '1px solid #6366f1',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '12px',
+                    background: 'rgba(255,255,255,0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '22px',
+                  }}>
+                    🏢
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: driveAcceptedStatus ? '#6ee7b7' : '#a5b4fc', fontWeight: 700 }}>
+                      {driveAcceptedStatus ? '🌟 Official Placement Mentor' : '📢 College Placement Drive Request'}
+                    </div>
+                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#fff' }}>
+                      {driveInvite.drive.companyName} Placement Drive — Guidance Invitation
+                    </h3>
+                  </div>
+                </div>
+                <div style={{
+                  background: 'rgba(255,255,255,0.12)',
+                  padding: '6px 14px',
+                  borderRadius: '20px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#e0e7ff',
+                }}>
+                  📅 Drive Date: {driveInvite.drive.driveDate}
+                </div>
+              </div>
+
+              <p style={{ margin: 0, fontSize: '14px', color: '#e0e7ff', lineHeight: 1.5 }}>
+                {driveAcceptedStatus ? (
+                  <>
+                    Thank you for stepping up to guide juniors! You are recognized as an alumni mentor for <strong>{driveInvite.drive.companyName}</strong>. Students who meet eligibility will be joined in your preparation session.
+                  </>
+                ) : (
+                  <>
+                    Placement cell has announced a placement drive for <strong>{driveInvite.drive.companyName}</strong> on <strong>{driveInvite.drive.driveDate}</strong>. Since you have experience at {driveInvite.drive.companyName}, the admin has requested your mentorship to guide junior students preparing for interviews!
+                  </>
+                )}
+              </p>
+
+              {!driveAcceptedStatus ? (
+                <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
+                  <button
+                    onClick={() => handleDriveResponse('ACCEPT')}
+                    disabled={driveAccepting}
+                    style={{
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#fff',
+                      border: 'none',
+                      padding: '10px 22px',
+                      borderRadius: '10px',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      cursor: driveAccepting ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    {driveAccepting ? '⏳ Confirming...' : '✅ Accept & Guide Juniors'}
+                  </button>
+                  <button
+                    onClick={() => handleDriveResponse('DECLINE')}
+                    disabled={driveAccepting}
+                    style={{
+                      background: 'rgba(255,255,255,0.1)',
+                      color: '#e0e7ff',
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      padding: '10px 18px',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      fontSize: '14px',
+                      cursor: driveAccepting ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Decline
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6ee7b7', fontSize: '13px', fontWeight: 600 }}>
+                  <span>✅ Mentorship Accepted</span>
+                  <span>•</span>
+                  <span>Preparation Webinar: <a href={driveInvite.drive.webinarLink} target="_blank" rel="noreferrer" style={{ color: '#a7f3d0', textDecoration: 'underline' }}>{driveInvite.drive.webinarLink}</a></span>
+                </div>
+              )}
+            </div>
+          )}
+
           <section className="ad-hero">
             <div className="ad-hero-copy">
               <p className="ad-greeting">{greeting},</p>

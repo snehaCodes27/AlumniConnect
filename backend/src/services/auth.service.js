@@ -178,8 +178,8 @@ const getCurrentUser = async (userId) => {
   });
 
   if (!user) {
-    const error = new Error('User not found.');
-    error.statusCode = 404;
+    const error = new Error('User session expired. Please log in again.');
+    error.statusCode = 401;
     throw error;
   }
 
