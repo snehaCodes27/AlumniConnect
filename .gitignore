@@ -83,3 +83,10 @@ public/assets/
 
 *.md
 *.sql
+
+# Private donation training data and trained artifacts
+ai-service/data/
+ai-service/models/*.json
+!docs/DONATION_PREDICTION.md
+
+*.md

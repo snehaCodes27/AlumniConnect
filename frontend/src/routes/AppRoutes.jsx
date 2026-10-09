@@ -73,6 +73,7 @@ export default function AppRoutes() {
           <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/company-connect" element={<CompanyConnectAdmin />} />
+            <Route path="/admin/donations" element={<AdminDashboard />} />
           </Route>
 
           {/* Catch-all redirect */}

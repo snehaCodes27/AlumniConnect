@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import DonationPredictionPage from './DonationPredictionPage';
 import NotificationDropdown from '../../components/NotificationDropdown';
 import {
   LayoutDashboard,
@@ -55,6 +56,7 @@ const NAV_ITEMS = [
   { key: 'events', label: 'Events', icon: Calendar, href: '/admin/events' },
   { key: 'community', label: 'Community', icon: MessageSquare, href: '/admin/community' },
   { key: 'companies', label: 'Companies', icon: Building2, href: '/admin/companies' },
+  { key: 'donations', label: 'Donation Prediction', icon: TrendingUp, href: '/admin/donations' },
   { key: 'reports', label: 'Reports & Analytics', icon: BarChart2, href: '/admin/reports' },
   { key: 'settings', label: 'Settings', icon: Settings, href: '/admin/settings' },
 ];
@@ -188,9 +190,10 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    if (location.pathname === '/admin/donations') return;
     fetchDashboard();
     fetchPendingUsers();
-  }, [fetchDashboard, fetchPendingUsers]);
+  }, [fetchDashboard, fetchPendingUsers, location.pathname]);
 
   const handleApprove = async (userId) => {
     try {
@@ -323,6 +326,7 @@ export default function AdminDashboard() {
         </header>
 
         <main className="flex-1 overflow-auto p-5">
+          {location.pathname === '/admin/donations' ? <DonationPredictionPage /> : <>
           <div className="mb-6 flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-black tracking-tight text-slate-900">Admin Dashboard</h1>
@@ -661,6 +665,7 @@ export default function AdminDashboard() {
               </div>
             )}
           </div>
+          </>}
         </main>
       </div>
 

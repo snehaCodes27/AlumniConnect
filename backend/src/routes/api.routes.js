@@ -23,6 +23,7 @@ const router = express.Router();
 router.use('/health', healthRoutes);
 router.use('/auth', authRoutes);
 router.use('/admin', adminRoutes);
+router.use('/admin/donations', require('./donationPrediction.routes'));
 router.use('/student/profile', studentProfileRoutes);
 router.use('/alumni/profile', alumniProfileRoutes);
 router.use('/alumni/directory', alumniDirectoryRoutes);
